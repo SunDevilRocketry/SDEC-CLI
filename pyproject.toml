@@ -1,0 +1,4 @@
+[project]
+name = "SDEC-CLI"
+license = { text = "BSD-3-Clause" }
+requires-python = ">=3.12.0"

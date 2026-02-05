@@ -1,0 +1,3 @@
+[submodule "sdecv2"]
+	path = sdecv2
+	url = https://github.com/SunDevilRocketry/SDECv2
