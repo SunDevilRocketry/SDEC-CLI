@@ -12,14 +12,49 @@ except ImportError:
 from serial import SerialException
 
 from SDECv2 import SerialObj
+from SDECv2.BaseController import create_controllers, BaseController
+from SDECv2.Sensor import SensorSentry
 
 class Cli(cmd.Cmd):
     intro = "SDECv2 CLI"
     prompt = ">> "
     serial_connection = SerialObj()
+    rev2_controller = create_controllers.flight_computer_rev2_controller()
+    base_controller = BaseController()
+    #use sensro sentry for sensor stuff
+
 
     def __init__(self):
         super().__init__()
+        
+        
+    def do_sensor_dump(self, line):
+        params = shlex.split(line)
+        
+    def do_sensor_poll(self, line):
+        params = shlex.split(line)
+        
+        
+    def do_dashboard_dump(self, line):
+        """
+        Dumps sensor data
+        Usage:
+            dashboard-dump
+        Args:
+            Serial object, Serial connection 
+        """
+        params = shlex.split(line)
+        sensor_dump = SensorSentry.dashboard_dump(self.serial_connection)
+        for sensor, readout in sensor_dump.items():
+            if readout is not None:
+                print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+            else:
+                print(f"{sensor.name}: 0.0 {sensor.unit}")
+
+        
+        
+        
+        
 
     def do_list_comports(self, line):
         """
