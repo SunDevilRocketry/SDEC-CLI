@@ -39,22 +39,20 @@ class Cli(cmd.Cmd):
         """
         Dumps sensor data
         Usage:
-            dashboard-dump
-        Args:
-            Serial object, Serial connection 
+            dashboard-dump 
         """
         params = shlex.split(line)
+        if len(params) != 0:
+            print("Usage: dashboard-dump")
+            return
+        
         sensor_dump = SensorSentry.dashboard_dump(self.serial_connection)
+        
         for sensor, readout in sensor_dump.items():
             if readout is not None:
                 print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
             else:
                 print(f"{sensor.name}: 0.0 {sensor.unit}")
-
-        
-        
-        
-        
 
     def do_list_comports(self, line):
         """
