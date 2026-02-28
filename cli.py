@@ -26,7 +26,7 @@ class Cli(cmd.Cmd):
         preset_config=create_configs.appa_preset_config(),
         preset_data=None
     )
-    #use sensro sentry for sensor stuff
+    #use sensro sentry for sensor stuf
 
 
     def __init__(self):
