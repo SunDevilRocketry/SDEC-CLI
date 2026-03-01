@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2025 Sun Devil Rocketry
 
+import argparse
 import cmd
 import shlex
 
@@ -11,110 +12,205 @@ except ImportError:
 
 from serial import SerialException
 
-from SDECv2 import SerialObj
 from SDECv2.BaseController import create_controllers, BaseController
-from SDECv2.Sensor import SensorSentry
+from SDECv2.Sensor import SensorSentry, create_sensors
 from SDECv2.Parser import Parser, create_configs
+from SDECv2.SerialController import SerialObj, Status
 
 class Cli(cmd.Cmd):
     intro = "SDECv2 CLI"
     prompt = ">> "
+
+    # Global objects 
     serial_connection = SerialObj()
-    rev2_controller = create_controllers.flight_computer_rev2_controller()
-    base_controller = BaseController()
+    controller = create_controllers.flight_computer_rev2_controller()
     appa_parser = Parser(
         preset_config=create_configs.appa_preset_config(),
         preset_data=None
     )
-    #use sensro sentry for sensor stuf
-
+    sensor_sentry = SensorSentry(create_sensors.flight_computer_rev2_sensors())
 
     def __init__(self):
         super().__init__()
         
-        
     def do_sensor_dump(self, line):
+        """
+            Prints one frame of all sensor data
+        Usage:
+            sensor_dump
+        """
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
+            return
+
         params = shlex.split(line)
+        if len(params) != 0:
+            print("Usage: sensor_dump")
+            return
         
+        sensor_dump = self.sensor_sentry.dump(self.serial_connection)
+        for sensor, readout in sensor_dump.items():
+            if readout:
+                print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+            else:
+                print(f"{sensor.name}: 0.0 {sensor.unit}")
+         
     def do_sensor_poll(self, line):
-        params = shlex.split(line)
+        """
+            Continues printing frames of all sensor data until timeout or count is reached
+        Usage:
+            sensor_poll <--timeout> <time> | <--count> | <count>
+        Arguments:
+            timeout Time in seconds for poll to last
+            count Integer of how many sensor frames to poll
+        Notes:
+            Must provide either a timeout or count
+        """
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
+            return
+
+        arg_parser = argparse.ArgumentParser(prog="sensor_poll", add_help=False)
+        group = arg_parser.add_mutually_exclusive_group(required=True)
+        group.add_argument("--timeout", type=int, help="Time in seconds to poll")
+        group.add_argument("--count", type=int, help="Number of sensor frames to poll")
+        
+        try:
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage: sensor_poll <--timeout> <time> | <--count> <count>")
+            return
+
+        if args.count is not None:
+            for sensor_poll in self.sensor_sentry.poll(self.serial_connection, count=args.count):
+                for sensor, readout in sensor_poll.items():
+                    if readout:
+                        print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                    else:
+                        print(f"{sensor.name}: 0.0 {sensor.unit}")
+        elif args.timeout is not None:
+            for sensor_poll in self.sensor_sentry.poll(self.serial_connection, timeout=args.timeout):
+                for sensor, readout in sensor_poll.items():
+                    if readout:
+                        print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                    else:
+                        print(f"{sensor.name}: 0.0 {sensor.unit}")
         
     def do_flash_extract(self, line):
         """
             Extracts all flash data from the flight computer and optionally stores the preset and data to files
         Usage:
-            flash-extract [store_preset] [store_data]
+            flash_extract [store_preset] [store_data]
         Arguments:
-            store_preset True or False, flag to store the preset to a file (default: False)
-            store_data True or False, flag to store the flash data to a file (default: False)
+            --store-preset Optional flag to store the preset to a file (default: False)
+            --store-data Optional flag to store the flash data to a file (default: False)
         """
-        params = shlex.split(line)
-        if len(params) != 2:
-            print("Usage: flash-extract [store_preset] [store_data]")
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
             return
-        stored_preset = params[0]
-        stored_data = params[1]
-        flash_data = self.appa_parser.flash_extract(self.serial_connection, store_preset = stored_preset, store_data = stored_data)
+
+        arg_parser = argparse.ArgumentParser(prog="flash_extract", add_help=False)
+        arg_parser.add_argument("--store-preset", action="store_true", help="Store preset to a file")
+        arg_parser.add_argument("--store-data", action="store_true", help="Store flash data to a file")
+
+        try: 
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage: flash_extract [--store-preset] [--store-data]")
+            return
+
+        self.appa_parser.flash_extract(
+            self.serial_connection, 
+            store_preset=args.store_preset, 
+            store_data=args.store_data
+        )
         
     def do_upload_preset(self, line):
         """
         Uploads a preset to the flight computer from a file
         Usage:
-            upload-preset <path>
+            upload_preset [path]
         Arguments:
             path Optional Path to the preset file to upload
         """
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
+            return
+
         params = shlex.split(line)
         if len(params) == 1:
-            the_path = params[0]
+            path = params[0]
         elif len(params) == 0:
-            the_path = "a_input/to_upload_preset.json"
+            path = "SDECv2/a_input/to_upload_preset.json"
         else:
-            print("Usage: upload-preset <path>")
+            print("Usage: upload_preset [path]")
             return
-        parser = Parser.upload_preset(self.serial_connection, path = the_path)
+        
+        Parser.upload_preset(self.serial_connection, path=path)
         
     def do_download_preset(self, line):
         """
         Downloads the current preset from the flight computer and stores it to a file
         Usage:
-            download-preset [path]
+            download_preset [path]
         Arguments:
             path Optional Path to store the downloaded preset file
         """
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
+            return
+
         params = shlex.split(line)
         if len(params) == 1:
-            the_path = params[0]
+            path = params[0]
         elif len(params) == 0:
-            the_path = "a_output/downloaded_preset.json"
+            path = "SDECv2/a_output/downloaded_preset.json"
         else:
-            print("Usage: download-preset [path]")
+            print("Usage: download_preset [path]")
             return
-        self.appa_parser.download_preset(self.serial_connection, path = the_path)
+        
+        self.appa_parser.download_preset(self.serial_connection, path=path)
         
     def do_verify_preset(self, line):
         """
         Verifies the current preset on the flight computer against a preset file
         Usage:
-            verify-preset
+            verify_preset
         """
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
+            return
+
         params = shlex.split(line)
         if len(params) != 0:
-            print("Usage: verify-preset")
+            print("Usage: verify_preset")
             return
-        downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
+        
+        downloaded_parser = Parser.from_file(path="SDECv2/a_output/downloaded_preset.json")
         verify_result = downloaded_parser.verify_preset(self.serial_connection)
+        
         print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
         
     def do_dashboard_dump(self, line):
         """
         Dumps sensor data
         Usage:
-            dashboard-dump 
+            dashboard_dump 
         """
+
+        if self.serial_connection.comport.status is not Status.OPEN: 
+            print("Error: No serial connection")
+            return
+
         params = shlex.split(line)
         if len(params) != 0:
-            print("Usage: dashboard-dump")
+            print("Usage: dashboard_dump")
             return
         
         sensor_dump = SensorSentry.dashboard_dump(self.serial_connection)
@@ -129,12 +225,12 @@ class Cli(cmd.Cmd):
         """
         List the currently available comports
         Usage:
-            list-comports
+            list_comports
         """
         
         params = shlex.split(line)
         if len(params) != 0:
-            print("Usage: list-comports")
+            print("Usage: list_comports")
             return
         
         print("Available ports:")
