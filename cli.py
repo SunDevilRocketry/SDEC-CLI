@@ -68,6 +68,8 @@ class Cli(cmd.Cmd):
             Must provide either a timeout or count
         """
 
+        print("NOTE: Currently unsupported by v2.6.0 of Flight Computer Firmware")
+
         if self.serial_connection.comport.status is not Status.OPEN: 
             print("Error: No serial connection")
             return
@@ -214,7 +216,7 @@ class Cli(cmd.Cmd):
             return
         
         sensor_dump = SensorSentry.dashboard_dump(self.serial_connection)
-        
+
         for sensor, readout in sensor_dump.items():
             if readout is not None:
                 print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
