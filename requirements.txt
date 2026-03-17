@@ -1,2 +1,2 @@
-pyserial==3.5
 pyreadline3==3.5.4
+-r SDECv2/requirements.txt
