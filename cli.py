@@ -104,10 +104,12 @@ class Cli(cmd.Cmd):
         """
             Extracts all flash data from the flight computer and optionally stores the preset and data to files
         Usage:
-            flash_extract [store_preset] [store_data]
+            flash_extract [--store_preset <path>] [--store_data <path>] [--no-store-preset] [--no-store-data]
         Arguments:
-            --store-preset Optional flag to store the preset to a file (default: False)
-            --store-data Optional flag to store the flash data to a file (default: False)
+            --store-preset Optional flag to specify path to store preset to
+            --store-data Optional flag to specify path to store data to
+            --no-store-preset Optional flag to not store the preset to a file (default: True)
+            --no-store-data Optional flag to not store the flash data to a file (default: True)
         """
 
         if self.serial_connection.comport.status is not Status.OPEN: 
@@ -115,19 +117,31 @@ class Cli(cmd.Cmd):
             return
 
         arg_parser = argparse.ArgumentParser(prog="flash_extract", add_help=False)
-        arg_parser.add_argument("--store-preset", action="store_true", help="Store preset to a file")
-        arg_parser.add_argument("--store-data", action="store_true", help="Store flash data to a file")
+        arg_parser.add_argument("--store-preset", type=str, help="Path to store preset to")
+        arg_parser.add_argument("--store-data", type=str, help="Path to store data to")
+        arg_parser.add_argument("--no-store-preset", action="store_true", help="Disable storing preset to a file")
+        arg_parser.add_argument("--no-store-data", action="store_true", help="Disable storing flash data to a file")
 
         try: 
             args = arg_parser.parse_args(shlex.split(line))
         except SystemExit:
             print("Usage: flash_extract [--store-preset] [--store-data]")
             return
+        
+        # These default to a space since flash extract does not store when the path is ""
+        preset_path = " "
+        data_path = " "
+        
+        if args.store_preset: preset_path = args.store_preset
+        if args.store_data: data_path = args.store_data
+
+        if args.no_store_preset: preset_path = ""
+        if args.no_store_data: data_path = ""
 
         self.appa_parser.flash_extract(
             self.serial_connection, 
-            store_preset=args.store_preset, 
-            store_data=args.store_data
+            preset_path=preset_path, 
+            data_path=data_path
         )
         
     def do_upload_preset(self, line):
@@ -147,7 +161,7 @@ class Cli(cmd.Cmd):
         if len(params) == 1:
             path = params[0]
         elif len(params) == 0:
-            path = "SDECv2/a_input/to_upload_preset.json"
+            path = "a_input/to_upload_preset.json"
         else:
             print("Usage: upload_preset [path]")
             return
@@ -171,7 +185,7 @@ class Cli(cmd.Cmd):
         if len(params) == 1:
             path = params[0]
         elif len(params) == 0:
-            path = "SDECv2/a_output/downloaded_preset.json"
+            path = "a_output/downloaded_preset.json"
         else:
             print("Usage: download_preset [path]")
             return
@@ -194,7 +208,7 @@ class Cli(cmd.Cmd):
             print("Usage: verify_preset")
             return
         
-        downloaded_parser = Parser.from_file(path="SDECv2/a_output/downloaded_preset.json")
+        downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
         verify_result = downloaded_parser.verify_preset(self.serial_connection)
         
         print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
