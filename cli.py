@@ -40,7 +40,7 @@ class Cli(cmd.Cmd):
             sensor_dump
         """
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
@@ -70,7 +70,7 @@ class Cli(cmd.Cmd):
 
         print("NOTE: Currently unsupported by v2.6.0 of Flight Computer Firmware")
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
@@ -99,120 +99,115 @@ class Cli(cmd.Cmd):
                         print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
                     else:
                         print(f"{sensor.name}: 0.0 {sensor.unit}")
-        
-    def do_flash_extract(self, line):
+
+    def do_flash(self, line):
         """
-            Extracts all flash data from the flight computer and optionally stores the preset and data to files
+            Commands for controlling flash and performing flash operations.
         Usage:
-            flash_extract [--store_preset <path>] [--store_data <path>] [--no-store-preset] [--no-store-data]
+            flash extract [--store_preset <path>] [--store_data <path>] [--no-store-preset] [--no-store-data]
         Arguments:
-            --store-preset Optional flag to specify path to store preset to
-            --store-data Optional flag to specify path to store data to
-            --no-store-preset Optional flag to not store the preset to a file (default: True)
-            --no-store-data Optional flag to not store the flash data to a file (default: True)
+            extract:
+                --store-preset Optional flag to specify path to store preset to
+                --store-data Optional flag to specify path to store data to
+                --no-store-preset Optional flag to not store the preset to a file (default: True)
+                --no-store-data Optional flag to not store the flash data to a file (default: True)
         """
+        arg_parser = argparse.ArgumentParser(prog="flash", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="subcommand", required=True)
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
-            print("Error: No serial connection")
-            return
-
-        arg_parser = argparse.ArgumentParser(prog="flash_extract", add_help=False)
-        arg_parser.add_argument("--store-preset", type=str, help="Path to store preset to")
-        arg_parser.add_argument("--store-data", type=str, help="Path to store data to")
-        arg_parser.add_argument("--no-store-preset", action="store_true", help="Disable storing preset to a file")
-        arg_parser.add_argument("--no-store-data", action="store_true", help="Disable storing flash data to a file")
+        extract_parser = sub_parser.add_parser("extract")
+        extract_parser.add_argument("--store-preset", type=str, help="Path to store preset to")
+        extract_parser.add_argument("--store-data", type=str, help="Path to store data to")
+        extract_parser.add_argument("--no-store-preset", action="store_true", help="Disable storing preset to a file")
+        extract_parser.add_argument("--no-store-data", action="store_true", help="Disable storing flash data to a file")
 
         try: 
             args = arg_parser.parse_args(shlex.split(line))
         except SystemExit:
-            print("Usage: flash_extract [--store-preset] [--store-data]")
+            print("Usage:\n" + 
+                  "  flash_extract [--store-preset] [--store-data]"
+            )
             return
         
-        # These default to a space since flash extract does not store when the path is ""
-        preset_path = " "
-        data_path = " "
+        if not self.serial_connection.serialObj.is_open: 
+            print("Error: No serial connection")
+            return
         
-        if args.store_preset: preset_path = args.store_preset
-        if args.store_data: data_path = args.store_data
+        match args.subcommand:
+            case "extract":
+                preset_path = "a_output/extracted_preset.json"
+                data_path = "a_output/extracted_data.csv"
+                
+                if args.store_preset: preset_path = args.store_preset
+                if args.store_data: data_path = args.store_data
 
-        if args.no_store_preset: preset_path = ""
-        if args.no_store_data: data_path = ""
+                if args.no_store_preset: preset_path = ""
+                if args.no_store_data: data_path = ""
 
-        self.appa_parser.flash_extract(
-            self.serial_connection, 
-            preset_path=preset_path, 
-            data_path=data_path
-        )
-        
-    def do_upload_preset(self, line):
+                self.appa_parser.flash_extract(
+                    self.serial_connection, 
+                    preset_path=preset_path, 
+                    data_path=data_path
+                )
+
+    def do_preset(self, line):
         """
-        Uploads a preset to the flight computer from a file
+            Commands for managing presets on the Flight Computer
         Usage:
-            upload_preset [path]
+            preset upload [path]
+            preset download [path]
+            preset verify
         Arguments:
-            path Optional Path to the preset file to upload
+            upload:
+                path Optional Path to the preset file to upload
+            download:
+                path Option Path to store the downloaded preset file
         """
+        
+        arg_parser = argparse.ArgumentParser(prog="preset", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="subcommand", required=True)
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        upload_parser = sub_parser.add_parser("upload")
+        upload_parser.add_argument("path", 
+                                   nargs="?", 
+                                   default="a_input/to_upload_preset.json", 
+                                   help="Path to the preset file")
+        
+        download_parser = sub_parser.add_parser("download")
+        download_parser.add_argument("path",
+                                     nargs="?",
+                                     default="a_output/downloaded_preset.json",
+                                     help="Path to store the downloaded preset")
+        
+        verify_parser = sub_parser.add_parser("verify")
+
+        try:
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage:\n" +
+                    "  preset upload [path]\n" +
+                    "  preset download [path]\n" +
+                    "  preset verify\n"
+            )
+            return
+        
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
-        params = shlex.split(line)
-        if len(params) == 1:
-            path = params[0]
-        elif len(params) == 0:
-            path = "a_input/to_upload_preset.json"
-        else:
-            print("Usage: upload_preset [path]")
-            return
-        
-        Parser.upload_preset(self.serial_connection, path=path)
-        
-    def do_download_preset(self, line):
-        """
-        Downloads the current preset from the flight computer and stores it to a file
-        Usage:
-            download_preset [path]
-        Arguments:
-            path Optional Path to store the downloaded preset file
-        """
+        match args.subcommand:
+            case "upload":
+                Parser.upload_preset(self.serial_connection, path=args.path)
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
-            print("Error: No serial connection")
-            return
+            case "download":
+                self.appa_parser.download_preset(self.serial_connection, path=args.path)
 
-        params = shlex.split(line)
-        if len(params) == 1:
-            path = params[0]
-        elif len(params) == 0:
-            path = "a_output/downloaded_preset.json"
-        else:
-            print("Usage: download_preset [path]")
-            return
-        
-        self.appa_parser.download_preset(self.serial_connection, path=path)
-        
-    def do_verify_preset(self, line):
-        """
-        Verifies the current preset on the flight computer against a preset file
-        Usage:
-            verify_preset
-        """
+            case "verify":
+                downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
+                verify_result = downloaded_parser.verify_preset(self.serial_connection)
+                
+                print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
-            print("Error: No serial connection")
-            return
-
-        params = shlex.split(line)
-        if len(params) != 0:
-            print("Usage: verify_preset")
-            return
-        
-        downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
-        verify_result = downloaded_parser.verify_preset(self.serial_connection)
-        
-        print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
-        
     def do_dashboard_dump(self, line):
         """
         Dumps sensor data
@@ -220,7 +215,7 @@ class Cli(cmd.Cmd):
             dashboard_dump 
         """
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
@@ -282,7 +277,7 @@ class Cli(cmd.Cmd):
             return 
 
         self.serial_connection.init_comport(
-            name=name.upper(),
+            name=name,
             baudrate=921600,
             timeout=timeout
         )
