@@ -6,7 +6,7 @@ import shlex
 import sys
 
 from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import NestedCompleter
 from prompt_toolkit.history import InMemoryHistory
 
 from serial import SerialException
@@ -19,10 +19,10 @@ from SDECv2.SerialController import SerialObj, Status
 COMMANDS = [
     "sensor_dump",
     "sensor_poll",
-    "flash_extract",
-    "upload_preset",
-    "download_preset",
-    "verify_preset",
+    "flash",
+    "preset",
+    "preset",
+    "preset",
     "dashboard_dump",
     "list_comports",
     "connect",
@@ -48,7 +48,19 @@ class Cli:
     def __init__(self):
         self.session = PromptSession(
             history=InMemoryHistory(),
-            completer=WordCompleter(COMMANDS, sentence=True)
+            completer=NestedCompleter.from_nested_dict({
+                "help":          {cmd: None for cmd in COMMANDS},
+                "sensor_dump":   None,
+                "sensor_poll":   {"--timeout": None, "--count": None},
+                "flash":         {"extract": {"--store-preset": None, "--store-data": None, "--no-store-preset": None, "--no-store-data": None}},
+                "preset":        {"upload": None, "download": None, "verify": None},
+                "dashboard_dump": None,
+                "list_comports": None,
+                "connect":       None,
+                "disconnect":    None,
+                "quit":          None,
+                "q":             None,
+            }),
         )
 
     def cmdloop(self):
