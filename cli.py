@@ -2,13 +2,12 @@
 # Copyright (c) 2025 Sun Devil Rocketry
 
 import argparse
-import cmd
 import shlex
+import sys
 
-try:
-    import readline
-except ImportError:
-    import pyreadline3 as readline
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.history import InMemoryHistory
 
 from serial import SerialException
 
@@ -17,7 +16,23 @@ from SDECv2.Sensor import SensorSentry, create_sensors
 from SDECv2.Parser import Parser, create_configs
 from SDECv2.SerialController import SerialObj, Status
 
-class Cli(cmd.Cmd):
+COMMANDS = [
+    "sensor_dump",
+    "sensor_poll",
+    "flash_extract",
+    "upload_preset",
+    "download_preset",
+    "verify_preset",
+    "dashboard_dump",
+    "list_comports",
+    "connect",
+    "disconnect",
+    "help",
+    "quit",
+    "q"
+]
+
+class Cli:
     intro = "SDECv2 CLI"
     prompt = ">> "
 
@@ -31,7 +46,56 @@ class Cli(cmd.Cmd):
     sensor_sentry = SensorSentry(create_sensors.flight_computer_rev2_sensors())
 
     def __init__(self):
-        super().__init__()
+        self.session = PromptSession(
+            history=InMemoryHistory(),
+            completer=WordCompleter(COMMANDS, sentence=True)
+        )
+
+    def cmdloop(self):
+        print(self.intro)
+        while True:
+            try:
+                line = self.session.prompt(self.prompt).strip()
+            except KeyboardInterrupt:
+                print()
+                continue
+            except EOFError:
+                break
+
+            if not line: continue
+
+            params = shlex.split(line)
+            cmd, arg = params[0], params[1:]
+            handler = getattr(self, f"do_{cmd}", None)
+
+            if handler is None:
+                print(f"Unkown command: {cmd!r} (type 'help' for a list)")
+                continue
+
+            result = handler(shlex.join(arg))
+            if result: break
+
+    def do_help(self, line):
+        """
+            Lists available commands or show help for a sepecifc command
+        Usage:
+            help <command>
+        Arguments:
+            command The name of the command to show help for
+        """  
+        params = shlex.split(line)
+        if params:
+            handler = getattr(self, f"do_{params[0]}", None)
+            if handler and handler.__doc__:
+                print(handler.__doc__)
+            else:
+                print(f"No help for {params[0]!r}")
+        else:
+            print("Available commands:")
+            for name in COMMANDS:
+                 handler = getattr(self, f"do_{name}", None)
+                 doc = (handler.__doc__ or "").strip().splitlines()[0] if handler else ""
+                 print(f"   {name:<20} {doc}")
         
     def do_sensor_dump(self, line):
         """
