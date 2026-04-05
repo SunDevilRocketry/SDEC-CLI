@@ -8,13 +8,14 @@ import sys
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter
 from prompt_toolkit.history import InMemoryHistory
-
 from serial import SerialException
 
 from SDECv2.BaseController import create_controllers, BaseController
 from SDECv2.Sensor import SensorSentry, create_sensors
 from SDECv2.Parser import Parser, create_configs
 from SDECv2.SerialController import SerialObj, Status
+
+from hw_fw_pairing import HW_FW_PAIRS
 
 COMMANDS = [
     "sensor_dump",
@@ -38,7 +39,8 @@ class Cli:
 
     # Global objects 
     serial_connection = SerialObj()
-    controller = create_controllers.flight_computer_rev2_controller()
+    hardware_code = b"\x00"
+    firmware_code = b"\x00"
     appa_parser = Parser(
         preset_config=create_configs.appa_preset_config(),
         preset_data=None
@@ -365,6 +367,21 @@ class Cli:
                 print(f"Failed to open serial connection on port {name}")
         except Exception as e:
             print(f"Failed to open serial connection on port {name}: {e}")
+            return
+
+        # Connect opcode
+        self.serial_connection.send(b"\x02")
+
+        response = self.serial_connection.read(2)
+        self.hardware_code = bytes(response[0])
+        self.firmware_code = bytes(response[1])
+
+        for pair in HW_FW_PAIRS:
+            if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
+                print(f"Connected to hardware firmware pair {self.hardware_code} {pair.controller.name}>{self.firmware_code} {pair.firmware.name}")
+            else:
+                print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
+                return
 
     def do_disconnect(self, line):
         """
