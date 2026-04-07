@@ -373,15 +373,16 @@ class Cli:
         self.serial_connection.send(b"\x02")
 
         response = self.serial_connection.read(2)
-        self.hardware_code = bytes(response[0])
-        self.firmware_code = bytes(response[1])
+        self.hardware_code = bytes([response[0]])
+        self.firmware_code = bytes([response[1]])
 
         for pair in HW_FW_PAIRS:
             if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
                 print(f"Connected to hardware firmware pair {self.hardware_code} {pair.controller.name}>{self.firmware_code} {pair.firmware.name}")
-            else:
-                print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
-                return
+                break
+        else:
+            print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
+            return
 
     def do_disconnect(self, line):
         """
