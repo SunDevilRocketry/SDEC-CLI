@@ -22,8 +22,7 @@ COMMANDS = [
     "sensor_poll",
     "flash",
     "preset",
-    "preset",
-    "preset",
+    "lora",
     "dashboard_dump",
     "list_comports",
     "connect",
@@ -56,6 +55,7 @@ class Cli:
                 "sensor_poll":   {"--timeout": None, "--count": None},
                 "flash":         {"extract": {"--store-preset": None, "--store-data": None, "--no-store-preset": None, "--no-store-data": None}},
                 "preset":        {"upload": None, "download": None, "verify": None},
+                "lora":          {"preset": {"upload": None, "download": None}},
                 "dashboard_dump": None,
                 "list_comports": None,
                 "connect":       None,
@@ -418,6 +418,59 @@ class Cli:
                 print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
         except Exception as e:
             print(f"Failed to close serial connection: {e}")
+
+    def do_lora(self, line):
+        """
+        Commands for using and configuring LoRA
+        Usage:
+            lora preset upload [path]
+            lora preset download [path]
+        Arguments:
+            preset upload:
+                path Optional Path to the preset file to upload
+            preset download:
+                path Option Path to store the downloaded preset file        
+        """
+
+        arg_parser = argparse.ArgumentParser(prog="lora", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="command", required=True)
+        preset_parser = sub_parser.add_parser("preset")
+
+        preset_parser = preset_parser.add_subparsers(dest="subcommand", required=True)
+        
+        upload_parser = preset_parser.add_parser("upload")
+        upload_parser.add_argument("path", 
+                                   nargs="?", 
+                                   default="a_input/to_upload_lora_preset.json", 
+                                   help="Path to the LoRA preset file")
+        
+        download_parser = preset_parser.add_parser("download")
+        download_parser.add_argument("path",
+                                     nargs="?",
+                                     default="a_output/downloaded_lora_preset.json",
+                                     help="Path to store the LoRA downloaded preset")
+
+        try:
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage:\n" +
+                    "  lora preset upload [path]\n" +
+                    "  lora preset download [path]\n"
+            )
+            return
+        
+        if not self.serial_connection.serialObj.is_open: 
+            print("Error: No serial connection")
+            return
+
+        match args.command:
+            case "preset":
+                match args.subcommand:
+                    case "upload":
+                        self.appa_parser.upload_lora_preset(self.serial_connection, path=args.path)
+
+                    case "download":
+                        self.appa_parser.download_lora_preset(self.serial_connection, path=args.path)
 
     def do_quit(self, line):
         """
