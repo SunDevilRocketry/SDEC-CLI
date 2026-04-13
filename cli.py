@@ -379,6 +379,7 @@ class Cli:
 
             for pair in HW_FW_PAIRS:
                 if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
+                    self.serial_connection.controller = pair.controller
                     print(f"Connected to hardware firmware pair {self.hardware_code} {pair.controller.name}>{self.firmware_code} {pair.firmware.name}")
                     break
             else:
