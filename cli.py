@@ -303,15 +303,15 @@ class Cli:
             return
         
         dashboard_obj = Telemetry()
-        dashboard_obj.dashboard_dump()
+        dashboard_obj.dashboard_dump(self.serial_connection)
         dashboard_obj.get_latest_dashboard_dump()
-        sensor_dump = dashboard_obj.get_latest_dashboard_dump()
+        dashboard_dump = dashboard_obj.get_latest_dashboard_dump()
 
-        for sensor, readout in sensor_dump.items():
+        for sensor, readout in dashboard_dump.items():
             if readout is not None:
-                print(f"{sensor}: {readout:.2f} {sensor.unit}")
+                print(f"{sensor}: {readout:.2f}")
             else:
-                print(f"{sensor}: 0.0 {sensor.unit}")
+                print(f"{sensor}: 0.0")
 
     def do_list_comports(self, line):
         """
