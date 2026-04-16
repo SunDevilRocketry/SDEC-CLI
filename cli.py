@@ -307,6 +307,10 @@ class Cli:
         dashboard_obj.get_latest_dashboard_dump()
         dashboard_dump = dashboard_obj.get_latest_dashboard_dump()
 
+        if dashboard_dump is None:
+            print("Dashboard dump not found.")
+            return
+
         for sensor, readout in dashboard_dump.items():
             if readout is not None:
                 print(f"{sensor}: {readout:.2f}")
@@ -374,6 +378,10 @@ class Cli:
 
         try:
             self.serial_connection.connect()
+
+            if self.serial_connection.target is None:
+                raise IndexError()
+
             self.hardware_code = self.serial_connection.target.controller.id
             self.firmware_code = self.serial_connection.target.firmware.id
 
