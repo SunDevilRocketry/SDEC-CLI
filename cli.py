@@ -4,6 +4,7 @@
 import argparse
 import shlex
 import sys
+import time
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter
@@ -221,12 +222,14 @@ class Cli:
 
                 if args.no_store_preset: preset_path = ""
                 if args.no_store_data: data_path = ""
-
+                start = time.perf_counter()
                 self.appa_parser.flash_extract(
                     self.serial_connection, 
                     preset_path=preset_path, 
                     data_path=data_path
                 )
+                end = time.perf_counter()
+                print(f"Elapsed time: {(end-start):.3f} seconds")
 
     def do_preset(self, line):
         """
