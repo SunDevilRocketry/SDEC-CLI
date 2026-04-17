@@ -59,7 +59,7 @@ class Cli:
                 "preset":        {"upload": None, "download": None, "verify": None},
                 "dashboard_dump": None,
                 "list_comports": None,
-                "connect":       None,
+                "connect":       {port for port in self.serial_connection.available_comports()},
                 "disconnect":    None,
                 "quit":          None,
                 "q":             None,
