@@ -134,6 +134,8 @@ class Cli:
                 print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
             else:
                 print(f"{sensor.name}: 0.0 {sensor.unit}")
+
+        self.serial_connection.reset_input_buffer()
          
     def do_sensor_poll(self, line):
         """
@@ -178,6 +180,8 @@ class Cli:
                         print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
                     else:
                         print(f"{sensor.name}: 0.0 {sensor.unit}")
+
+        self.serial_connection.reset_input_buffer()
 
     def do_flash(self, line):
         """
@@ -230,6 +234,8 @@ class Cli:
                 )
                 end = time.perf_counter()
                 print(f"Elapsed time: {(end-start):.3f} seconds")
+
+        self.serial_connection.reset_input_buffer()
 
     def do_preset(self, line):
         """
@@ -289,6 +295,8 @@ class Cli:
                 
                 print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
 
+        self.serial_connection.reset_input_buffer()
+
     def do_dashboard_dump(self, line):
         """
         Dumps sensor data
@@ -312,6 +320,8 @@ class Cli:
                 print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
             else:
                 print(f"{sensor.name}: 0.0 {sensor.unit}")
+
+        self.serial_connection.reset_input_buffer()
 
     def do_list_comports(self, line):
         """
@@ -381,7 +391,7 @@ class Cli:
 
         for pair in HW_FW_PAIRS:
             if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
-                print(f"Connected to hardware firmware pair {self.hardware_code} {pair.controller.name}>{self.firmware_code} {pair.firmware.name}")
+                print(f"Connected to hardware firmware pair {pair.controller.name} > {pair.firmware.name}")
                 break
         else:
             print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
@@ -404,6 +414,8 @@ class Cli:
         except AttributeError:
             print(f"No initialized comport")
             return
+        
+        self.serial_connection.reset_input_buffer()
 
         try:
             if self.serial_connection.close_comport():
