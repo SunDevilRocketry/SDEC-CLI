@@ -4,6 +4,7 @@
 import argparse
 import shlex
 import sys
+import time
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter
@@ -58,7 +59,7 @@ class Cli:
                 "lora":          {"preset": {"upload": None, "download": None}},
                 "dashboard_dump": None,
                 "list_comports": None,
-                "connect":       None,
+                "connect":       {port for port in self.serial_connection.available_comports()},
                 "disconnect":    None,
                 "quit":          None,
                 "q":             None,
@@ -133,6 +134,8 @@ class Cli:
                 print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
             else:
                 print(f"{sensor.name}: 0.0 {sensor.unit}")
+
+        self.serial_connection.reset_input_buffer()
          
     def do_sensor_poll(self, line):
         """
@@ -178,6 +181,8 @@ class Cli:
                     else:
                         print(f"{sensor.name}: 0.0 {sensor.unit}")
 
+        self.serial_connection.reset_input_buffer()
+
     def do_flash(self, line):
         """
             Commands for controlling flash and performing flash operations.
@@ -221,12 +226,16 @@ class Cli:
 
                 if args.no_store_preset: preset_path = ""
                 if args.no_store_data: data_path = ""
-
+                start = time.perf_counter()
                 self.appa_parser.flash_extract(
                     self.serial_connection, 
                     preset_path=preset_path, 
                     data_path=data_path
                 )
+                end = time.perf_counter()
+                print(f"Elapsed time: {(end-start):.3f} seconds")
+
+        self.serial_connection.reset_input_buffer()
 
     def do_preset(self, line):
         """
@@ -286,6 +295,8 @@ class Cli:
                 
                 print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
 
+        self.serial_connection.reset_input_buffer()
+
     def do_dashboard_dump(self, line):
         """
         Dumps sensor data
@@ -316,6 +327,8 @@ class Cli:
                 print(f"{sensor}: {readout:.2f}")
             else:
                 print(f"{sensor}: 0.0")
+
+        self.serial_connection.reset_input_buffer()
 
     def do_list_comports(self, line):
         """
@@ -419,6 +432,8 @@ class Cli:
         except AttributeError:
             print(f"No initialized comport")
             return
+        
+        self.serial_connection.reset_input_buffer()
 
         try:
             if self.serial_connection.close_comport():
