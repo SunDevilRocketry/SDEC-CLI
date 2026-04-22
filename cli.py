@@ -13,7 +13,7 @@ from serial import SerialException
 
 from SDECv2.BaseController import create_controllers, BaseController
 from SDECv2.Sensor import SensorSentry, create_sensors
-from SDECv2.Parser import Parser, create_configs
+from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
 
 from hw_fw_pairing import HW_FW_PAIRS
@@ -23,8 +23,7 @@ COMMANDS = [
     "sensor_poll",
     "flash",
     "preset",
-    "preset",
-    "preset",
+    "lora",
     "dashboard_dump",
     "list_comports",
     "connect",
@@ -57,6 +56,7 @@ class Cli:
                 "sensor_poll":   {"--timeout": None, "--count": None},
                 "flash":         {"extract": {"--store-preset": None, "--store-data": None, "--no-store-preset": None, "--no-store-data": None}},
                 "preset":        {"upload": None, "download": None, "verify": None},
+                "lora":          {"preset": {"upload": None, "download": None}},
                 "dashboard_dump": None,
                 "list_comports": None,
                 "connect":       {port for port in self.serial_connection.available_comports()},
@@ -313,13 +313,20 @@ class Cli:
             print("Usage: dashboard_dump")
             return
         
-        sensor_dump = SensorSentry.dashboard_dump(self.serial_connection)
+        dashboard_obj = Telemetry()
+        dashboard_obj.dashboard_dump(self.serial_connection)
+        dashboard_obj.get_latest_dashboard_dump()
+        dashboard_dump = dashboard_obj.get_latest_dashboard_dump()
 
-        for sensor, readout in sensor_dump.items():
+        if dashboard_dump is None:
+            print("Dashboard dump not found.")
+            return
+
+        for sensor, readout in dashboard_dump.items():
             if readout is not None:
-                print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                print(f"{sensor}: {readout:.2f}")
             else:
-                print(f"{sensor.name}: 0.0 {sensor.unit}")
+                print(f"{sensor}: 0.0")
 
         self.serial_connection.reset_input_buffer()
 
@@ -382,20 +389,31 @@ class Cli:
             print(f"Failed to open serial connection on port {name}: {e}")
             return
 
-        # Connect opcode
-        self.serial_connection.send(b"\x02")
+        try:
+            self.serial_connection.connect()
 
-        response = self.serial_connection.read(2)
-        self.hardware_code = bytes([response[0]])
-        self.firmware_code = bytes([response[1]])
+            if self.serial_connection.target is None:
+                raise IndexError()
 
-        for pair in HW_FW_PAIRS:
-            if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
-                print(f"Connected to hardware firmware pair {pair.controller.name} > {pair.firmware.name}")
-                break
-        else:
-            print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
-            return
+            self.hardware_code = self.serial_connection.target.controller.id
+            self.firmware_code = self.serial_connection.target.firmware.id
+
+            for pair in HW_FW_PAIRS:
+                if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
+                    self.serial_connection.target = pair
+                    print(f"Connected to hardware firmware pair {self.hardware_code} {pair.controller.name}>{self.firmware_code} {pair.firmware.name}")
+                    break
+            else:
+                print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
+                return
+        except IndexError as e:
+            print("No hardware firmware pair received, closing connection")
+
+            if self.serial_connection.close_comport():
+                print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
+            else:
+                print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
+        
 
     def do_disconnect(self, line):
         """
@@ -424,6 +442,59 @@ class Cli:
                 print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
         except Exception as e:
             print(f"Failed to close serial connection: {e}")
+
+    def do_lora(self, line):
+        """
+        Commands for using and configuring LoRA
+        Usage:
+            lora preset upload [path]
+            lora preset download [path]
+        Arguments:
+            preset upload:
+                path Optional Path to the preset file to upload
+            preset download:
+                path Option Path to store the downloaded preset file        
+        """
+
+        arg_parser = argparse.ArgumentParser(prog="lora", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="command", required=True)
+        preset_parser = sub_parser.add_parser("preset")
+
+        preset_parser = preset_parser.add_subparsers(dest="subcommand", required=True)
+        
+        upload_parser = preset_parser.add_parser("upload")
+        upload_parser.add_argument("path", 
+                                   nargs="?", 
+                                   default="a_input/to_upload_lora_preset.json", 
+                                   help="Path to the LoRA preset file")
+        
+        download_parser = preset_parser.add_parser("download")
+        download_parser.add_argument("path",
+                                     nargs="?",
+                                     default="a_output/downloaded_lora_preset.json",
+                                     help="Path to store the LoRA downloaded preset")
+
+        try:
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage:\n" +
+                    "  lora preset upload [path]\n" +
+                    "  lora preset download [path]\n"
+            )
+            return
+        
+        if not self.serial_connection.serialObj.is_open: 
+            print("Error: No serial connection")
+            return
+
+        match args.command:
+            case "preset":
+                match args.subcommand:
+                    case "upload":
+                        self.appa_parser.upload_lora_preset(self.serial_connection, path=args.path)
+
+                    case "download":
+                        self.appa_parser.download_lora_preset(self.serial_connection, path=args.path)
 
     def do_quit(self, line):
         """
