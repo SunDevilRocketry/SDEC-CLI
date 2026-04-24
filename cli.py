@@ -15,6 +15,7 @@ from SDECv2.BaseController import create_controllers, BaseController
 from SDECv2.Sensor import SensorSentry, create_sensors
 from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
+from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SDECError
 
 from hw_fw_pairing import HW_FW_PAIRS
 
@@ -226,16 +227,15 @@ class Cli:
 
                 if args.no_store_preset: preset_path = ""
                 if args.no_store_data: data_path = ""
-                start = time.perf_counter()
-                self.appa_parser.flash_extract(
+
+                try:
+                    self.appa_parser.flash_extract(
                     self.serial_connection, 
                     preset_path=preset_path, 
                     data_path=data_path
-                )
-                end = time.perf_counter()
-                print(f"Elapsed time: {(end-start):.3f} seconds")
-
-        self.serial_connection.reset_input_buffer()
+                    )
+                except SDECError as e:
+                    print(f"SDEC error: {e}")
 
     def do_preset(self, line):
         """
@@ -284,13 +284,23 @@ class Cli:
 
         match args.subcommand:
             case "upload":
-                Parser.upload_preset(self.serial_connection, path=args.path)
+                try:
+                    Parser.upload_preset(self.serial_connection, path=args.path)
+                except SDECError as e:
+                    print(f"SDEC error: {e}")
 
             case "download":
                 self.appa_parser.download_preset(self.serial_connection, path=args.path)
 
             case "verify":
-                downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
+                try:
+                    downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
+                except SDECError as e:
+                    print(f"SDEC error: {e}")
+                    return
+                except FileNotFoundError as e:
+                    print(f"File not found: {e}")
+                    return
                 verify_result = downloaded_parser.verify_preset(self.serial_connection)
                 
                 print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
