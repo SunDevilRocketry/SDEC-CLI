@@ -15,7 +15,7 @@ from SDECv2.BaseController import create_controllers, BaseController
 from SDECv2.Sensor import SensorSentry, create_sensors
 from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
-from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SDECError
+from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SerialError, ComportError, SDECError
 
 from hw_fw_pairing import HW_FW_PAIRS
 
@@ -129,12 +129,15 @@ class Cli:
             print("Usage: sensor_dump")
             return
         
-        sensor_dump = self.sensor_sentry.dump(self.serial_connection)
-        for sensor, readout in sensor_dump.items():
-            if readout:
-                print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-            else:
-                print(f"{sensor.name}: 0.0 {sensor.unit}")
+        try:
+            sensor_dump = self.sensor_sentry.dump(self.serial_connection)
+            for sensor, readout in sensor_dump.items():
+                if readout:
+                    print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                else:
+                    print(f"{sensor.name}: 0.0 {sensor.unit}")
+        except (SerialError, InvalidDataError) as e:
+            print(f"Command failed: {e}")
 
         self.serial_connection.reset_input_buffer()
          
@@ -167,20 +170,23 @@ class Cli:
             print("Usage: sensor_poll <--timeout> <time> | <--count> <count>")
             return
 
-        if args.count is not None:
-            for sensor_poll in self.sensor_sentry.poll(self.serial_connection, count=args.count):
-                for sensor, readout in sensor_poll.items():
-                    if readout:
-                        print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-                    else:
-                        print(f"{sensor.name}: 0.0 {sensor.unit}")
-        elif args.timeout is not None:
-            for sensor_poll in self.sensor_sentry.poll(self.serial_connection, timeout=args.timeout):
-                for sensor, readout in sensor_poll.items():
-                    if readout:
-                        print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-                    else:
-                        print(f"{sensor.name}: 0.0 {sensor.unit}")
+        try: 
+            if args.count is not None:
+                for sensor_poll in self.sensor_sentry.poll(self.serial_connection, count=args.count):
+                    for sensor, readout in sensor_poll.items():
+                        if readout:
+                            print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                        else:
+                            print(f"{sensor.name}: 0.0 {sensor.unit}")
+            elif args.timeout is not None:
+                for sensor_poll in self.sensor_sentry.poll(self.serial_connection, timeout=args.timeout):
+                    for sensor, readout in sensor_poll.items():
+                        if readout:
+                            print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                        else:
+                            print(f"{sensor.name}: 0.0 {sensor.unit}")
+        except (SerialError, InvalidDataError) as e:
+            print(f"Command failed: {e}")
 
         self.serial_connection.reset_input_buffer()
 
@@ -239,7 +245,7 @@ class Cli:
                     end = time.perf_counter()
                     print(f"Elapsed time: {(end-start):.3f} seconds")
                 except SDECError as e:
-                    print(f"SDEC error: {e}")
+                    print(f"Command failed: {e}")
 
         self.serial_connection.reset_input_buffer()
 
@@ -293,16 +299,18 @@ class Cli:
                 try:
                     Parser.upload_preset(self.serial_connection, path=args.path)
                 except SDECError as e:
-                    print(f"SDEC error: {e}")
+                    print(f"Command failed: {e}")
 
             case "download":
-                self.appa_parser.download_preset(self.serial_connection, path=args.path)
-
+                try:
+                    self.appa_parser.download_preset(self.serial_connection, path=args.path)
+                except SDECError as e:
+                    print(f"Command failed: {e}")
             case "verify":
                 try:
                     downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
                 except SDECError as e:
-                    print(f"SDEC error: {e}")
+                    print(f"Command failed: {e}")
                     return
                 except FileNotFoundError as e:
                     print(f"File not found: {e}")
@@ -401,7 +409,7 @@ class Cli:
                 print(f"Successfully opened serial connection on port {name}")
             else:
                 print(f"Failed to open serial connection on port {name}")
-        except Exception as e:
+        except ComportError as e:
             print(f"Failed to open serial connection on port {name}: {e}")
             return
 
@@ -424,7 +432,11 @@ class Cli:
                 return
         except IndexError as e:
             print("No hardware firmware pair received, closing connection")
+        
+        except SerialError as e:
+            print(f"Failed to communicate: {e}")
 
+        finally:
             if self.serial_connection.close_comport():
                 print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
             else:
@@ -456,7 +468,7 @@ class Cli:
                 print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
             else:
                 print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
-        except Exception as e:
+        except ComportError as e:
             print(f"Failed to close serial connection: {e}")
 
     def do_lora(self, line):
@@ -507,10 +519,15 @@ class Cli:
             case "preset":
                 match args.subcommand:
                     case "upload":
-                        self.appa_parser.upload_lora_preset(self.serial_connection, path=args.path)
-
+                        try: 
+                            self.appa_parser.upload_lora_preset(self.serial_connection, path=args.path)
+                        except SDECError as e:
+                            print(f"Command failed: {e}")
                     case "download":
-                        self.appa_parser.download_lora_preset(self.serial_connection, path=args.path)
+                        try:
+                            self.appa_parser.download_lora_preset(self.serial_connection, path=args.path)
+                        except SDECError as e:
+                            print(f"Command failed: {e}")
 
     def do_quit(self, line):
         """
