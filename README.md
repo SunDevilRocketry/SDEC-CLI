@@ -10,3 +10,5 @@ Before running:
   ]
 }
 ```
+
+The CLI supports automatically connecting to a port specified in a file named `config.json` in the project root. For example, if your device usually connects over `COM4`, then your configuration would be `{"port":"COM4"}`. To tell the CLI to use your user config, start it with the `-c` or `--use_config` flags. For example, `python cli.py -c`.

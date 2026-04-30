@@ -2,6 +2,8 @@
 # Copyright (c) 2025 Sun Devil Rocketry
 
 import argparse
+import json
+import os
 import shlex
 import sys
 import time
@@ -67,8 +69,27 @@ class Cli:
             }),
         )
 
-    def cmdloop(self):
+    def cmdloop(self, use_config: bool):
         print(self.intro)
+
+        if use_config:
+            print("Using user config")
+
+            if os.path.exists("config.json"):
+                with open("config.json", "r") as f:
+                    try:
+                        config = json.load(f)
+
+                        port = config.get("port", "")
+                        if port != "":
+                            self.do_connect(port)
+                        else:
+                            print("No port in config file. Use this format: {\"port\":\"name\"}")
+                    except json.JSONDecodeError:
+                        print("Config file empty, starting with no user config")
+            else:
+                print("config.json not found, starting with no user config")
+
         while True:
             try:
                 line = self.session.prompt(self.prompt).strip()
@@ -381,6 +402,7 @@ class Cli:
         Notes:
             Default timeout is 1 second
         """
+        should_close = False
 
         params = shlex.split(line)
         if len(params) == 1:
@@ -430,19 +452,22 @@ class Cli:
             else:
                 print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
                 return
+            
         except IndexError as e:
             print("No hardware firmware pair received, closing connection")
+            should_close = True
         
         except SerialError as e:
             print(f"Failed to communicate: {e}")
+            should_close = True
 
         finally:
-            if self.serial_connection.close_comport():
-                print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
-            else:
-                print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
+            if should_close:
+                if self.serial_connection.close_comport():
+                    print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
+                else:
+                    print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
         
-
     def do_disconnect(self, line):
         """
         Disconnect the current comport
@@ -552,4 +577,13 @@ class Cli:
         return self.do_quit(line)
     
 if __name__=="__main__":
-    Cli().cmdloop()
+    parser = argparse.ArgumentParser(description="Runs SDECv2 through a CLI")
+    parser.add_argument(
+        "-c", 
+        "--use_config", 
+        action="store_true", 
+        help="Start the CLI with settings from the config.json file (if it exists)"
+    )
+    args = parser.parse_args()
+
+    Cli().cmdloop(use_config=args.use_config)
