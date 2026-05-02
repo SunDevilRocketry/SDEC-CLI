@@ -328,15 +328,7 @@ class Cli:
                 except SDECError as e:
                     print(f"Command failed: {e}")
             case "verify":
-                try:
-                    downloaded_parser = Parser.from_file(path="a_output/downloaded_preset.json")
-                except SDECError as e:
-                    print(f"Command failed: {e}")
-                    return
-                except FileNotFoundError as e:
-                    print(f"File not found: {e}")
-                    return
-                verify_result = downloaded_parser.verify_preset(self.serial_connection)
+                verify_result = Parser.verify_preset(self.serial_connection)
                 
                 print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
 
