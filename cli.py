@@ -2,28 +2,48 @@
 # Copyright (c) 2025 Sun Devil Rocketry
 
 import argparse
-import cmd
+import json
+import os
 import shlex
+import sys
+import time
 
-try:
-    import readline
-except ImportError:
-    import pyreadline3 as readline
-
+from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import NestedCompleter
+from prompt_toolkit.history import InMemoryHistory
 from serial import SerialException
 
 from SDECv2.BaseController import create_controllers, BaseController
 from SDECv2.Sensor import SensorSentry, create_sensors
-from SDECv2.Parser import Parser, create_configs
+from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
+from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SerialError, ComportError, SDECError
 
-class Cli(cmd.Cmd):
+from hw_fw_pairing import HW_FW_PAIRS
+
+COMMANDS = [
+    "sensor_dump",
+    "sensor_poll",
+    "flash",
+    "preset",
+    "lora",
+    "dashboard_dump",
+    "list_comports",
+    "connect",
+    "disconnect",
+    "help",
+    "quit",
+    "q"
+]
+
+class Cli:
     intro = "SDECv2 CLI"
     prompt = ">> "
 
     # Global objects 
     serial_connection = SerialObj()
-    controller = create_controllers.flight_computer_rev2_controller()
+    hardware_code = b"\x00"
+    firmware_code = b"\x00"
     appa_parser = Parser(
         preset_config=create_configs.appa_preset_config(),
         preset_data=None
@@ -31,7 +51,88 @@ class Cli(cmd.Cmd):
     sensor_sentry = SensorSentry(create_sensors.flight_computer_rev2_sensors())
 
     def __init__(self):
-        super().__init__()
+        self.session = PromptSession(
+            history=InMemoryHistory(),
+            completer=NestedCompleter.from_nested_dict({
+                "help":          {cmd: None for cmd in COMMANDS},
+                "sensor_dump":   None,
+                "sensor_poll":   {"--timeout": None, "--count": None},
+                "flash":         {"extract": {"--store-preset": None, "--store-data": None, "--no-store-preset": None, "--no-store-data": None}},
+                "preset":        {"upload": None, "download": None, "verify": None},
+                "lora":          {"preset": {"upload": None, "download": None}},
+                "dashboard_dump": None,
+                "list_comports": None,
+                "connect":       {port for port in self.serial_connection.available_comports()},
+                "disconnect":    None,
+                "quit":          None,
+                "q":             None,
+            }),
+        )
+
+    def cmdloop(self, use_config: bool):
+        print(self.intro)
+
+        if use_config:
+            print("Using user config")
+
+            if os.path.exists("config.json"):
+                with open("config.json", "r") as f:
+                    try:
+                        config = json.load(f)
+
+                        port = config.get("port", "")
+                        if port != "":
+                            self.do_connect(port)
+                        else:
+                            print("No port in config file. Use this format: {\"port\":\"name\"}")
+                    except json.JSONDecodeError:
+                        print("Config file empty, starting with no user config")
+            else:
+                print("config.json not found, starting with no user config")
+
+        while True:
+            try:
+                line = self.session.prompt(self.prompt).strip()
+            except KeyboardInterrupt:
+                print()
+                continue
+            except EOFError:
+                break
+
+            if not line: continue
+
+            params = shlex.split(line)
+            cmd, arg = params[0], params[1:]
+            handler = getattr(self, f"do_{cmd}", None)
+
+            if handler is None:
+                print(f"Unkown command: {cmd!r} (type 'help' for a list)")
+                continue
+
+            result = handler(shlex.join(arg))
+            if result: break
+
+    def do_help(self, line):
+        """
+            Lists available commands or show help for a sepecifc command
+        Usage:
+            help <command>
+        Arguments:
+            command The name of the command to show help for
+        """  
+        params = shlex.split(line)
+        if params:
+            handler = getattr(self, f"do_{params[0]}", None)
+            if handler and handler.__doc__:
+                print(handler.__doc__)
+            else:
+                print(f"No help for {params[0]!r}")
+        else:
+            print("Available commands:")
+            for name in COMMANDS:
+                 handler = getattr(self, f"do_{name}", None)
+                 doc = (handler.__doc__ or "").strip().splitlines()[0] if handler else ""
+                 print(f"   {name:<20} {doc}")
         
     def do_sensor_dump(self, line):
         """
@@ -40,7 +141,7 @@ class Cli(cmd.Cmd):
             sensor_dump
         """
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
@@ -49,12 +150,17 @@ class Cli(cmd.Cmd):
             print("Usage: sensor_dump")
             return
         
-        sensor_dump = self.sensor_sentry.dump(self.serial_connection)
-        for sensor, readout in sensor_dump.items():
-            if readout:
-                print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-            else:
-                print(f"{sensor.name}: 0.0 {sensor.unit}")
+        try:
+            sensor_dump = self.sensor_sentry.dump(self.serial_connection)
+            for sensor, readout in sensor_dump.items():
+                if readout:
+                    print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                else:
+                    print(f"{sensor.name}: 0.0 {sensor.unit}")
+        except (SerialError, InvalidDataError) as e:
+            print(f"Command failed: {e}")
+
+        self.serial_connection.reset_input_buffer()
          
     def do_sensor_poll(self, line):
         """
@@ -70,7 +176,7 @@ class Cli(cmd.Cmd):
 
         print("NOTE: Currently unsupported by v2.6.0 of Flight Computer Firmware")
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
@@ -85,120 +191,149 @@ class Cli(cmd.Cmd):
             print("Usage: sensor_poll <--timeout> <time> | <--count> <count>")
             return
 
-        if args.count is not None:
-            for sensor_poll in self.sensor_sentry.poll(self.serial_connection, count=args.count):
-                for sensor, readout in sensor_poll.items():
-                    if readout:
-                        print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-                    else:
-                        print(f"{sensor.name}: 0.0 {sensor.unit}")
-        elif args.timeout is not None:
-            for sensor_poll in self.sensor_sentry.poll(self.serial_connection, timeout=args.timeout):
-                for sensor, readout in sensor_poll.items():
-                    if readout:
-                        print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-                    else:
-                        print(f"{sensor.name}: 0.0 {sensor.unit}")
-        
-    def do_flash_extract(self, line):
+        try: 
+            if args.count is not None:
+                for sensor_poll in self.sensor_sentry.poll(self.serial_connection, count=args.count):
+                    for sensor, readout in sensor_poll.items():
+                        if readout:
+                            print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                        else:
+                            print(f"{sensor.name}: 0.0 {sensor.unit}")
+            elif args.timeout is not None:
+                for sensor_poll in self.sensor_sentry.poll(self.serial_connection, timeout=args.timeout):
+                    for sensor, readout in sensor_poll.items():
+                        if readout:
+                            print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                        else:
+                            print(f"{sensor.name}: 0.0 {sensor.unit}")
+        except (SerialError, InvalidDataError) as e:
+            print(f"Command failed: {e}")
+
+        self.serial_connection.reset_input_buffer()
+
+    def do_flash(self, line):
         """
-            Extracts all flash data from the flight computer and optionally stores the preset and data to files
+            Commands for controlling flash and performing flash operations.
         Usage:
-            flash_extract [store_preset] [store_data]
+            flash extract [--store_preset <path>] [--store_data <path>] [--no-store-preset] [--no-store-data]
         Arguments:
-            --store-preset Optional flag to store the preset to a file (default: False)
-            --store-data Optional flag to store the flash data to a file (default: False)
+            extract:
+                --store-preset Optional flag to specify path to store preset to
+                --store-data Optional flag to specify path to store data to
+                --no-store-preset Optional flag to not store the preset to a file (default: True)
+                --no-store-data Optional flag to not store the flash data to a file (default: True)
         """
+        arg_parser = argparse.ArgumentParser(prog="flash", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="subcommand", required=True)
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
-            print("Error: No serial connection")
-            return
-
-        arg_parser = argparse.ArgumentParser(prog="flash_extract", add_help=False)
-        arg_parser.add_argument("--store-preset", action="store_true", help="Store preset to a file")
-        arg_parser.add_argument("--store-data", action="store_true", help="Store flash data to a file")
+        extract_parser = sub_parser.add_parser("extract")
+        extract_parser.add_argument("--store-preset", type=str, help="Path to store preset to")
+        extract_parser.add_argument("--store-data", type=str, help="Path to store data to")
+        extract_parser.add_argument("--no-store-preset", action="store_true", help="Disable storing preset to a file")
+        extract_parser.add_argument("--no-store-data", action="store_true", help="Disable storing flash data to a file")
 
         try: 
             args = arg_parser.parse_args(shlex.split(line))
         except SystemExit:
-            print("Usage: flash_extract [--store-preset] [--store-data]")
+            print("Usage:\n" + 
+                  "  flash_extract [--store-preset] [--store-data]"
+            )
             return
-
-        self.appa_parser.flash_extract(
-            self.serial_connection, 
-            store_preset=args.store_preset, 
-            store_data=args.store_data
-        )
         
-    def do_upload_preset(self, line):
+        if not self.serial_connection.serialObj.is_open: 
+            print("Error: No serial connection")
+            return
+        
+        match args.subcommand:
+            case "extract":
+                preset_path = "a_output/extracted_preset.json"
+                data_path = "a_output/extracted_data.csv"
+                
+                if args.store_preset: preset_path = args.store_preset
+                if args.store_data: data_path = args.store_data
+
+                if args.no_store_preset: preset_path = ""
+                if args.no_store_data: data_path = ""
+
+                start = time.perf_counter()
+                try:
+                    self.appa_parser.flash_extract(
+                        self.serial_connection, 
+                        preset_path=preset_path, 
+                        data_path=data_path
+                    )
+
+                    end = time.perf_counter()
+                    print(f"Elapsed time: {(end-start):.3f} seconds")
+                except SDECError as e:
+                    print(f"Command failed: {e}")
+
+        self.serial_connection.reset_input_buffer()
+
+    def do_preset(self, line):
         """
-        Uploads a preset to the flight computer from a file
+            Commands for managing presets on the Flight Computer
         Usage:
-            upload_preset [path]
+            preset upload [path]
+            preset download [path]
+            preset verify
         Arguments:
-            path Optional Path to the preset file to upload
+            upload:
+                path Optional Path to the preset file to upload
+            download:
+                path Option Path to store the downloaded preset file
         """
+        
+        arg_parser = argparse.ArgumentParser(prog="preset", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="subcommand", required=True)
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        upload_parser = sub_parser.add_parser("upload")
+        upload_parser.add_argument("path", 
+                                   nargs="?", 
+                                   default="a_input/to_upload_preset.json", 
+                                   help="Path to the preset file")
+        
+        download_parser = sub_parser.add_parser("download")
+        download_parser.add_argument("path",
+                                     nargs="?",
+                                     default="a_output/downloaded_preset.json",
+                                     help="Path to store the downloaded preset")
+        
+        verify_parser = sub_parser.add_parser("verify")
+
+        try:
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage:\n" +
+                    "  preset upload [path]\n" +
+                    "  preset download [path]\n" +
+                    "  preset verify\n"
+            )
+            return
+        
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
-        params = shlex.split(line)
-        if len(params) == 1:
-            path = params[0]
-        elif len(params) == 0:
-            path = "SDECv2/a_input/to_upload_preset.json"
-        else:
-            print("Usage: upload_preset [path]")
-            return
-        
-        Parser.upload_preset(self.serial_connection, path=path)
-        
-    def do_download_preset(self, line):
-        """
-        Downloads the current preset from the flight computer and stores it to a file
-        Usage:
-            download_preset [path]
-        Arguments:
-            path Optional Path to store the downloaded preset file
-        """
+        match args.subcommand:
+            case "upload":
+                try:
+                    Parser.upload_preset(self.serial_connection, path=args.path)
+                except SDECError as e:
+                    print(f"Command failed: {e}")
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
-            print("Error: No serial connection")
-            return
+            case "download":
+                try:
+                    self.appa_parser.download_preset(self.serial_connection, path=args.path)
+                except SDECError as e:
+                    print(f"Command failed: {e}")
+            case "verify":
+                verify_result = Parser.verify_preset(self.serial_connection)
+                
+                print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
 
-        params = shlex.split(line)
-        if len(params) == 1:
-            path = params[0]
-        elif len(params) == 0:
-            path = "SDECv2/a_output/downloaded_preset.json"
-        else:
-            print("Usage: download_preset [path]")
-            return
-        
-        self.appa_parser.download_preset(self.serial_connection, path=path)
-        
-    def do_verify_preset(self, line):
-        """
-        Verifies the current preset on the flight computer against a preset file
-        Usage:
-            verify_preset
-        """
+        self.serial_connection.reset_input_buffer()
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
-            print("Error: No serial connection")
-            return
-
-        params = shlex.split(line)
-        if len(params) != 0:
-            print("Usage: verify_preset")
-            return
-        
-        downloaded_parser = Parser.from_file(path="SDECv2/a_output/downloaded_preset.json")
-        verify_result = downloaded_parser.verify_preset(self.serial_connection)
-        
-        print(f"{"Valid Preset" if verify_result else "Invalid Preset"}")
-        
     def do_dashboard_dump(self, line):
         """
         Dumps sensor data
@@ -206,7 +341,7 @@ class Cli(cmd.Cmd):
             dashboard_dump 
         """
 
-        if self.serial_connection.comport.status is not Status.OPEN: 
+        if not self.serial_connection.serialObj.is_open: 
             print("Error: No serial connection")
             return
 
@@ -215,13 +350,22 @@ class Cli(cmd.Cmd):
             print("Usage: dashboard_dump")
             return
         
-        sensor_dump = SensorSentry.dashboard_dump(self.serial_connection)
+        dashboard_obj = Telemetry()
+        dashboard_obj.dashboard_dump(self.serial_connection)
+        dashboard_obj.get_latest_dashboard_dump()
+        dashboard_dump = dashboard_obj.get_latest_dashboard_dump()
 
-        for sensor, readout in sensor_dump.items():
+        if dashboard_dump is None:
+            print("Dashboard dump not found.")
+            return
+
+        for sensor, readout in dashboard_dump.items():
             if readout is not None:
-                print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
+                print(f"{sensor}: {readout:.2f}")
             else:
-                print(f"{sensor.name}: 0.0 {sensor.unit}")
+                print(f"{sensor}: 0.0")
+
+        self.serial_connection.reset_input_buffer()
 
     def do_list_comports(self, line):
         """
@@ -250,6 +394,7 @@ class Cli(cmd.Cmd):
         Notes:
             Default timeout is 1 second
         """
+        should_close = False
 
         params = shlex.split(line)
         if len(params) == 1:
@@ -268,7 +413,7 @@ class Cli(cmd.Cmd):
             return 
 
         self.serial_connection.init_comport(
-            name=name.upper(),
+            name=name,
             baudrate=921600,
             timeout=timeout
         )
@@ -278,9 +423,36 @@ class Cli(cmd.Cmd):
                 print(f"Successfully opened serial connection on port {name}")
             else:
                 print(f"Failed to open serial connection on port {name}")
-        except Exception as e:
+        except ComportError as e:
             print(f"Failed to open serial connection on port {name}: {e}")
+            return
 
+        try:
+            self.serial_connection.connect()
+
+            if self.serial_connection.target is None:
+                raise IndexError()
+
+            self.hardware_code = self.serial_connection.target.controller.id
+            self.firmware_code = self.serial_connection.target.firmware.id
+
+            print(f"Connected to hardware firmware pair {self.hardware_code}>{self.firmware_code}")
+            
+        except IndexError as e:
+            print("No hardware firmware pair received, closing connection")
+            should_close = True
+        
+        except SerialError as e:
+            print(f"Failed to communicate: {e}")
+            should_close = True
+
+        finally:
+            if should_close:
+                if self.serial_connection.close_comport():
+                    print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
+                else:
+                    print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
+        
     def do_disconnect(self, line):
         """
         Disconnect the current comport
@@ -298,14 +470,74 @@ class Cli(cmd.Cmd):
         except AttributeError:
             print(f"No initialized comport")
             return
+        
+        self.serial_connection.reset_input_buffer()
 
         try:
             if self.serial_connection.close_comport():
                 print(f"Successfully closed serial connection on port {self.serial_connection.comport.name}")
             else:
                 print(f"Failed to close serial connection on port {self.serial_connection.comport.name}")
-        except Exception as e:
+        except ComportError as e:
             print(f"Failed to close serial connection: {e}")
+
+    def do_lora(self, line):
+        """
+        Commands for using and configuring LoRA
+        Usage:
+            lora preset upload [path]
+            lora preset download [path]
+        Arguments:
+            preset upload:
+                path Optional Path to the preset file to upload
+            preset download:
+                path Option Path to store the downloaded preset file        
+        """
+
+        arg_parser = argparse.ArgumentParser(prog="lora", add_help=False)
+        sub_parser = arg_parser.add_subparsers(dest="command", required=True)
+        preset_parser = sub_parser.add_parser("preset")
+
+        preset_parser = preset_parser.add_subparsers(dest="subcommand", required=True)
+        
+        upload_parser = preset_parser.add_parser("upload")
+        upload_parser.add_argument("path", 
+                                   nargs="?", 
+                                   default="a_input/to_upload_lora_preset.json", 
+                                   help="Path to the LoRA preset file")
+        
+        download_parser = preset_parser.add_parser("download")
+        download_parser.add_argument("path",
+                                     nargs="?",
+                                     default="a_output/downloaded_lora_preset.json",
+                                     help="Path to store the LoRA downloaded preset")
+
+        try:
+            args = arg_parser.parse_args(shlex.split(line))
+        except SystemExit:
+            print("Usage:\n" +
+                    "  lora preset upload [path]\n" +
+                    "  lora preset download [path]\n"
+            )
+            return
+        
+        if not self.serial_connection.serialObj.is_open: 
+            print("Error: No serial connection")
+            return
+
+        match args.command:
+            case "preset":
+                match args.subcommand:
+                    case "upload":
+                        try: 
+                            self.appa_parser.upload_lora_preset(self.serial_connection, path=args.path)
+                        except SDECError as e:
+                            print(f"Command failed: {e}")
+                    case "download":
+                        try:
+                            self.appa_parser.download_lora_preset(self.serial_connection, path=args.path)
+                        except SDECError as e:
+                            print(f"Command failed: {e}")
 
     def do_quit(self, line):
         """
@@ -330,4 +562,13 @@ class Cli(cmd.Cmd):
         return self.do_quit(line)
     
 if __name__=="__main__":
-    Cli().cmdloop()
+    parser = argparse.ArgumentParser(description="Runs SDECv2 through a CLI")
+    parser.add_argument(
+        "-c", 
+        "--use_config", 
+        action="store_true", 
+        help="Start the CLI with settings from the config.json file (if it exists)"
+    )
+    args = parser.parse_args()
+
+    Cli().cmdloop(use_config=args.use_config)

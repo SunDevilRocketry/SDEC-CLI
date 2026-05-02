@@ -1,2 +1,2 @@
-pyreadline3==3.5.4
+prompt_toolkit==3.0.52
 -r SDECv2/requirements.txt

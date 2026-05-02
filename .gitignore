@@ -1,4 +1,7 @@
 **__pycache__
 .vscode
 .venv
+config.json
+a_output
+a_input
 *.egg-info
