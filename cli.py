@@ -436,14 +436,7 @@ class Cli:
             self.hardware_code = self.serial_connection.target.controller.id
             self.firmware_code = self.serial_connection.target.firmware.id
 
-            for pair in HW_FW_PAIRS:
-                if self.hardware_code == pair.controller.id and self.firmware_code == pair.firmware.id:
-                    self.serial_connection.target = pair
-                    print(f"Connected to hardware firmware pair {self.hardware_code} {pair.controller.name}>{self.firmware_code} {pair.firmware.name}")
-                    break
-            else:
-                print(f"Unable to connect to unknown hardware firmware pair {self.hardware_code}>{self.firmware_code}")
-                return
+            print(f"Connected to hardware firmware pair {self.hardware_code}>{self.firmware_code}")
             
         except IndexError as e:
             print("No hardware firmware pair received, closing connection")
