@@ -19,8 +19,6 @@ from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
 from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SerialError, ComportError, SDECError
 
-from hw_fw_pairing import HW_FW_PAIRS
-
 COMMANDS = [
     "sensor_dump",
     "sensor_poll",
@@ -42,8 +40,6 @@ class Cli:
 
     # Global objects 
     serial_connection = SerialObj()
-    hardware_code = b"\x00"
-    firmware_code = b"\x00"
     appa_parser = Parser(
         preset_config=create_configs.appa_preset_config(),
         preset_data=None
@@ -433,10 +429,12 @@ class Cli:
             if self.serial_connection.target is None:
                 raise IndexError()
 
-            self.hardware_code = self.serial_connection.target.controller.id
-            self.firmware_code = self.serial_connection.target.firmware.id
+            hardware_name = self.serial_connection.target.controller.name
+            firmware_name = self.serial_connection.target.firmware.name
 
-            print(f"Connected to hardware firmware pair {self.hardware_code}>{self.firmware_code}")
+            print(f"Connected to target device.")
+            print(f"Device hardware: {hardware_name}")
+            print(f"Device firmware: {firmware_name}")
             
         except IndexError as e:
             print("No hardware firmware pair received, closing connection")
