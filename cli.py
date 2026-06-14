@@ -379,9 +379,14 @@ class Cli:
             print("Usage: list_comports")
             return
         
+        ports = self.serial_connection.available_comports()
+
+        if not ports:
+            print("No ports found.")
+        
         print("Available ports:")
-        for port in self.serial_connection.available_comports():
-            print(f"  {port}")
+        for port, name in ports.items():
+            print(f"  {port} - {name}")
 
     def do_connect(self, line):
         """
