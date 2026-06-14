@@ -383,6 +383,7 @@ class Cli:
 
         if not ports:
             print("No ports found.")
+            return
         
         print("Available ports:")
         for port, name in ports.items():
