@@ -18,6 +18,7 @@ from SDECv2.Sensor import SensorSentry, create_sensors
 from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
 from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SerialError, ComportError, SDECError
+from SDECv2.Commands import flash_subcommands
 
 COMMANDS = [
     "sensor_dump",
@@ -228,6 +229,17 @@ class Cli:
         extract_parser.add_argument("--no-store-preset", action="store_true", help="Disable storing preset to a file")
         extract_parser.add_argument("--no-store-data", action="store_true", help="Disable storing flash data to a file")
 
+        read_parser = sub_parser.add_parser("read")
+        read_parser.add_argument("address",type=int,help="address in flash chip to be read from")
+        read_parser.add_argument("number_bytes",type=int,help="number of bytes to read")
+
+        write_parser = sub_parser.add_parser("write")
+        write_parser.add_argument("address",type=int,help="address in flash chip to write to")
+        write_parser.add_argument("message",type=int,help="message to be sent")
+
+        enable_parser = sub_parser.add_parser("enable")
+        disable_parse = sub_parser.add_parser("disable")
+
         try: 
             args = arg_parser.parse_args(shlex.split(line))
         except SystemExit:
@@ -263,6 +275,20 @@ class Cli:
                     print(f"Elapsed time: {(end-start):.3f} seconds")
                 except SDECError as e:
                     print(f"Command failed: {e}")
+            case "enable":
+                flash_subcommands.flash_enable(self.serial_connection)
+            case "disable":
+                flash_subcommands.flash_disable(self.serial_connection)
+            case "read":
+                address = args.address.to_bytes(1,byteorder = "big",signed = False)
+                num_bytes = args.number_bytes
+                file = ""
+                flash_subcommands.flash_read(self.serial_connection,address,num_bytes,file)
+            case "write":
+                address = args.address.to_bytes(1,byteorder = "big")
+                message = args.message.to_bytes(1,byteorder = "big",signed = False)
+                file = ""
+                flash_subcommands.flash_write(self.serial_connection,address,message,file)
 
         self.serial_connection.reset_input_buffer()
 
@@ -576,3 +602,5 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     Cli().cmdloop(use_config=args.use_config)
+
+
