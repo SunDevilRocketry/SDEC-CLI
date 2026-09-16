@@ -159,53 +159,32 @@ class Cli:
         self.serial_connection.reset_input_buffer()
          
     def do_sensor_poll(self, line):
-        """
-            Continues printing frames of all sensor data until timeout or count is reached
-        Usage:
-            sensor_poll <--timeout> <time> | <--count> | <count>
-        Arguments:
-            timeout Time in seconds for poll to last
-            count Integer of how many sensor frames to poll
-        Notes:
-            Must provide either a timeout or count
-        """
+          if not self.serial_connection.serialObj.is_open: 
+              print("Error: No serial connection")
+              return
+          try:
+              arg_parser = argparse.ArgumentParser(prog = "sensor_poll", add_help = False)
+              arg_parser.add_argument(
+                  "sensors",
+                  nargs = "+", 
+                  help = "list of sensors to poll"
+              )
+              args = arg_parser.parse_args(shlex.split(line))
+              args.sensors = [sensor.lower() for sensor in args.sensors]
 
-        print("NOTE: Currently unsupported by v2.6.0 of Flight Computer Firmware")
+              for filtered_dump in self.sensor_sentry.poll(
+                  self.serial_connection,
+                  args.sensors
+              ):
+                  for sensor, reading in filtered_dump.items():
+                      print(f"{sensor.name}: {reading} {sensor.unit}")
+                  else:
+                      print(f"{sensor.name}: 0.0 {sensor.unit}")
 
-        if not self.serial_connection.serialObj.is_open: 
-            print("Error: No serial connection")
-            return
+          except (SerialError, InvalidDataError) as e:
+              print(f"Command failed: {e}")
 
-        arg_parser = argparse.ArgumentParser(prog="sensor_poll", add_help=False)
-        group = arg_parser.add_mutually_exclusive_group(required=True)
-        group.add_argument("--timeout", type=int, help="Time in seconds to poll")
-        group.add_argument("--count", type=int, help="Number of sensor frames to poll")
-        
-        try:
-            args = arg_parser.parse_args(shlex.split(line))
-        except SystemExit:
-            print("Usage: sensor_poll <--timeout> <time> | <--count> <count>")
-            return
-
-        try: 
-            if args.count is not None:
-                for sensor_poll in self.sensor_sentry.poll(self.serial_connection, count=args.count):
-                    for sensor, readout in sensor_poll.items():
-                        if readout:
-                            print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-                        else:
-                            print(f"{sensor.name}: 0.0 {sensor.unit}")
-            elif args.timeout is not None:
-                for sensor_poll in self.sensor_sentry.poll(self.serial_connection, timeout=args.timeout):
-                    for sensor, readout in sensor_poll.items():
-                        if readout:
-                            print(f"{sensor.name}: {readout:.2f} {sensor.unit}")
-                        else:
-                            print(f"{sensor.name}: 0.0 {sensor.unit}")
-        except (SerialError, InvalidDataError) as e:
-            print(f"Command failed: {e}")
-
-        self.serial_connection.reset_input_buffer()
+          self.serial_connection.reset_input_buffer()
 
     def do_flash(self, line):
         """
