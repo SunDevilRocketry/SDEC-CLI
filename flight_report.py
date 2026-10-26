@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from SDECv2.Sensor.conv_functions import isa_get_altitude_qnh, quat_to_eul
+from SDECv2.Sensor.conv_functions import isa_get_altitude_qnh, mach_number, quat_to_eul
 
 
 class FlightReport:
@@ -167,6 +167,14 @@ class FlightReport:
                 altitude - launch_altitude if altitude is not None else None
                 for altitude in baro_altitudes
             ]
+        mach_values: list[float | None] = []
+        for index, velocity in enumerate(velocities):
+            altitude = baro_altitudes[index]
+            if altitude is None:
+                altitude = gps_altitudes[index]
+            if altitude is None:
+                altitude = (altitudes[index] or 0.0) + (launch_altitude or 0.0)
+            mach_values.append(mach_number(velocity, altitude) if velocity is not None else None)
 
         duration = max(0.0, max(times) - launch_time)
         max_altitude, apogee_index = self._maximum(altitudes)
@@ -228,16 +236,44 @@ class FlightReport:
         ))
 
         playback_start = launch_index if launch_index is not None else 0
-        viewer_indices = [
+        viewer_index_set = {
             playback_start + index
             for index in self._sample_indices(len(rows) - playback_start, 1200)
-        ]
+        }
+        viewer_index_set.update(
+            index
+            for index in range(playback_start, len(rows))
+            if states[index] == "4" or (index > playback_start and states[index] != states[index - 1])
+        )
+        burnout_index = next(
+            (
+                index
+                for index in range(playback_start + 1, len(states))
+                if states[index - 1] == "4" and states[index] == "5"
+            ),
+            None,
+        )
+        if burnout_index is not None:
+            taper_end_time = times[burnout_index] + 0.5
+            taper_end_index = next(
+                (
+                    index
+                    for index in range(burnout_index + 1, len(times))
+                    if times[index] > taper_end_time
+                ),
+                len(times) - 1,
+            )
+            viewer_index_set.update(range(burnout_index, taper_end_index + 1))
+        viewer_indices = sorted(viewer_index_set)
         viewer_data = [
             {
                 "t": relative_times[index],
                 "alt": altitudes[index],
+                "v": velocities[index],
+                "mach": mach_values[index],
                 "q": quaternions[index],
                 "e": [math.degrees(angle) for angle in quat_to_eul(*quaternions[index])],
+                "state": states[index],
             }
             for index in viewer_indices
         ]
@@ -259,7 +295,7 @@ class FlightReport:
             for label, measurement, note in stats
         )
 
-        model_path = Path(__file__).resolve().parent / "resources" / "NautilusModel.stl"
+        model_path = Path(__file__).resolve().parent / "resources" / "LOCKEDIN.stl"
         if not model_path.is_file():
             raise FileNotFoundError(f"Rocket model not found: {model_path}")
         original_model = model_path.read_bytes()
@@ -521,7 +557,9 @@ class FlightReport:
     let index = 0, playing = false, playbackStartTimestamp = null, playbackStartTime = 0, drawScene = null;
     slider.max = String(Math.max(samples.length - 1, 0));
     const maximumAltitude=Math.max(1,...samples.map(sample=>Math.max(0,sample.alt||0)));
-    const rocketHeight=1.2192;
+    const altitudeDisplayScale=1, smokeLifetime=3.5;
+    const coastTransitionSample=samples.find((sample,index)=>index>0&&samples[index-1].state==='4'&&sample.state==='5');
+    const coastTransitionTime=coastTransitionSample?.t??null;
 
     const multiplyQ = (a,b) => [
         a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
@@ -530,6 +568,14 @@ class FlightReport:
         a[0]*b[3]+a[1]*b[2]-a[2]*b[1]+a[3]*b[0]
     ];
     const normalizeQ = q => {{ const n=Math.hypot(...q)||1; return q.map(v=>v/n); }};
+    const displayQuaternion = telemetry => {{
+        const frameQuat=[Math.SQRT1_2,Math.SQRT1_2,0,0], frameQuatInv=[Math.SQRT1_2,-Math.SQRT1_2,0,0], modelBaseQuat=[Math.SQRT1_2,0,Math.SQRT1_2,0];
+        return normalizeQ(multiplyQ(multiplyQ(multiplyQ(frameQuat,normalizeQ(telemetry)),frameQuatInv),modelBaseQuat));
+    }};
+    const rotateVector = (q,v) => {{
+        const u=q.slice(1),t=[2*(u[1]*v[2]-u[2]*v[1]),2*(u[2]*v[0]-u[0]*v[2]),2*(u[0]*v[1]-u[1]*v[0])];
+        return [v[0]+q[0]*t[0]+u[1]*t[2]-u[2]*t[1],v[1]+q[0]*t[1]+u[2]*t[0]-u[0]*t[2],v[2]+q[0]*t[2]+u[0]*t[1]-u[1]*t[0]];
+    }};
     const perspective = (fov,aspect,near,far) => {{
         const f=1/Math.tan(fov/2), nf=1/(near-far);
         return new Float32Array([f/aspect,0,0,0, 0,f,0,0, 0,0,(far+near)*nf,-1, 0,0,2*far*near*nf,0]);
@@ -556,10 +602,117 @@ class FlightReport:
         if (!window.DecompressionStream) throw new Error('This browser cannot decompress the embedded STL model. Use a current browser.');
         const vertexSource='attribute vec3 aPosition; attribute vec3 aNormal; uniform mat4 uMvp; uniform vec4 uQuaternion; uniform vec3 uRocketPosition; uniform vec3 uMeshCenter; uniform float uModelScale; uniform mediump vec3 uShadowCenter; uniform mediump float uShadowRadius; uniform mediump float uIsShadow; uniform float uIsRocket; varying vec3 vNormal; varying vec3 vWorldPosition; varying mediump vec3 vModelPosition; vec3 qrot(vec4 q,vec3 v){{vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}} void main(){{vec3 p=aPosition;vec3 n=aNormal;vModelPosition=aPosition;if(uIsRocket>0.5){{p=qrot(uQuaternion,(p-uMeshCenter)*uModelScale)+uRocketPosition;n=qrot(uQuaternion,n);}}else if(uIsShadow>0.5){{p=vec3(aPosition.x*uShadowRadius+uShadowCenter.x,uShadowCenter.y,aPosition.z*uShadowRadius+uShadowCenter.z);n=vec3(0.0,1.0,0.0);}}vNormal=n;vWorldPosition=p;gl_Position=uMvp*vec4(p,1.0);}}';
         const fragmentSource='precision mediump float; uniform vec3 uColor; uniform mediump vec3 uShadowCenter; uniform mediump float uShadowRadius; uniform float uShadowOpacity; uniform float uCloudOpacity; uniform float uIsGround; uniform float uIsShadow; uniform float uIsVegetation; uniform float uIsCloud; varying vec3 vNormal; varying vec3 vWorldPosition; varying mediump vec3 vModelPosition; void main(){{float sunDiffuse=max(dot(normalize(vNormal),normalize(vec3(-0.35,0.85,0.4))),0.0);float groundLight=0.42+0.58*sunDiffuse;float rocketLight=0.20+0.80*sunDiffuse;if(uIsCloud>0.5){{float facing=max(normalize(vNormal).z,0.0);float edgeFade=smoothstep(0.0,0.98,facing);float variation=0.94+0.06*sin(vWorldPosition.x*0.004+vWorldPosition.z*0.003);vec3 cloudColor=mix(vec3(0.70,0.78,0.82),vec3(1.0,0.99,0.95),0.45+0.55*sunDiffuse);gl_FragColor=vec4(cloudColor,uCloudOpacity*variation*edgeFade);}}else if(uIsShadow>0.5){{float radius=length(vWorldPosition.xz-uShadowCenter.xz);float edge=1.0-smoothstep(uShadowRadius*0.55,uShadowRadius,radius);gl_FragColor=vec4(vec3(0.12,0.09,0.07),edge*uShadowOpacity);}}else if(uIsGround>0.5){{float broad=0.5+0.5*sin(vWorldPosition.x*0.0011+sin(vWorldPosition.z*0.0007))*cos(vWorldPosition.z*0.0013);float grain=fract(sin(dot(floor(vWorldPosition.xz*0.018),vec2(12.9898,78.233)))*43758.5453);float patch=0.5+0.5*sin(vWorldPosition.x*0.018+vWorldPosition.z*0.011)*cos(vWorldPosition.z*0.015-vWorldPosition.x*0.008);vec3 soil=mix(vec3(0.43,0.36,0.25),vec3(0.58,0.51,0.36),0.18+0.48*broad+0.20*grain);soil=mix(soil,vec3(0.34,0.37,0.25),patch*0.18);gl_FragColor=vec4(soil*groundLight,1.0);}}else if(uIsVegetation>0.5){{float variation=fract(sin(dot(floor(vWorldPosition.xz*2.0),vec2(41.7,289.3)))*24634.6345);vec3 foliage=mix(vec3(0.16,0.22,0.10),vec3(0.37,0.38,0.18),variation);float leafLight=0.32+0.68*sunDiffuse;gl_FragColor=vec4(foliage*leafLight,1.0);}}else{{float finRadial=smoothstep(44.0,58.0,length(vModelPosition.xy));float finLongitudinal=1.0-smoothstep(-1000.0,-910.0,vModelPosition.z);float finMask=finRadial*finLongitudinal;vec3 rocketColor=mix(uColor,vec3(0.88,0.08,0.10),finMask);gl_FragColor=vec4(rocketColor*rocketLight,1.0);}}}}';
-        const program=gl.createProgram(); gl.attachShader(program,shader(gl.VERTEX_SHADER,vertexSource)); gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fragmentSource)); gl.linkProgram(program);
+        const rocketFragmentSource=`
+            precision mediump float;
+            uniform vec3 uColor;
+            uniform mediump vec3 uMeshCenter;
+            uniform vec3 uShadowCenter;
+            uniform float uShadowRadius;
+            uniform float uShadowOpacity;
+            uniform float uIsGround;
+            uniform float uIsShadow;
+            uniform float uIsVegetation;
+            uniform float uIsPlume;
+            uniform float uIsEmber;
+            uniform float uIsSmoke;
+            uniform float uSmokeTime;
+            uniform float uPlumeBaseZ;
+            uniform float uPlumeLength;
+            uniform float uPlumeRootRadius;
+            uniform float uPlumeTipRadius;
+            uniform float uPlumeLayer;
+            uniform float uMach;
+            varying vec3 vNormal;
+            varying vec3 vWorldPosition;
+            varying mediump vec3 vModelPosition;
+            float temporalNoise(float time,float seed,float rate){{
+                float position=time*rate,cell=floor(position),fraction=fract(position);
+                fraction=fraction*fraction*(3.0-2.0*fraction);
+                float first=fract(sin(cell*127.1+seed*311.7)*43758.5453);
+                float second=fract(sin((cell+1.0)*127.1+seed*311.7)*43758.5453);
+                return mix(first,second,fraction);
+            }}
+            void main(){{
+                float sunDiffuse=max(dot(normalize(vNormal),normalize(vec3(-0.35,0.85,0.4))),0.0);
+                float groundLight=0.42+0.58*sunDiffuse;
+                float rocketLight=0.20+0.80*sunDiffuse;
+                if(uIsSmoke>0.5){{
+                    float age=clamp(vNormal.x,0.0,1.0);
+                    float seed=vNormal.y;
+                    float turbulence=temporalNoise(uSmokeTime,seed+vWorldPosition.x*0.07+vWorldPosition.y*0.11,3.8);
+                    vec3 smokeColor=mix(vec3(0.30,0.29,0.28),vec3(0.50,0.49,0.47),0.28+0.52*turbulence);
+                    float opacity=0.16*pow(1.0-age,1.45)*(0.84+0.16*turbulence);
+                    gl_FragColor=vec4(smokeColor,opacity);
+                }}else if(uIsEmber>0.5){{
+                    float seed=vModelPosition.x*0.071+vModelPosition.y*0.053+vModelPosition.z*0.037;
+                    float flicker=0.48+0.52*temporalNoise(uSmokeTime,seed,18.0);
+                    float colorShift=temporalNoise(uSmokeTime,seed+9.3,6.5);
+                    vec3 ember=mix(vec3(1.0,0.16,0.015),vec3(1.0,0.88,0.20),colorShift);
+                    gl_FragColor=vec4(ember,0.72*flicker);
+                }}else if(uIsPlume>0.5){{
+                    float progress=clamp((uPlumeBaseZ-vModelPosition.z)/uPlumeLength,0.0,1.0);
+                    float radius=length(vModelPosition.xy-uMeshCenter.xy);
+                    float expansion=smoothstep(0.0,0.48,progress);
+                    float envelope=mix(uPlumeRootRadius,uPlumeTipRadius,expansion)*(1.0-smoothstep(0.78,1.0,progress));
+                    float radial=radius/max(envelope,0.001);
+                    float angle=atan(vModelPosition.y-uMeshCenter.y,vModelPosition.x-uMeshCenter.x);
+                    float seed=angle*2.7+progress*17.0+uPlumeLayer*31.0;
+                    float turbulence=(temporalNoise(uSmokeTime,seed,6.8)-0.5)*2.0+(temporalNoise(uSmokeTime,seed+13.1,13.2)-0.5)*0.9;
+                    float eddies=temporalNoise(uSmokeTime,seed+27.4,9.1);
+                    float edge=1.0-smoothstep(0.82+0.05*turbulence,1.08+0.06*turbulence,radial);
+                    float tail=1.0-smoothstep(0.78,1.0,progress);
+                    float flicker=0.65+0.35*eddies;
+                    float heatShift=0.5+0.5*sin(uSmokeTime*6.8+progress*19.0+angle*2.0);
+                    vec3 flame;
+                    float opacity;
+                    if(uPlumeLayer>0.5){{
+                        float hotCore=1.0-smoothstep(0.08,0.68,progress);
+                        flame=mix(vec3(1.0,0.32+0.16*heatShift,0.035),vec3(1.0,0.86+0.12*heatShift,0.58+0.20*heatShift),hotCore);
+                        opacity=0.98*edge*(1.0-smoothstep(0.60,0.76,progress))*(0.88+0.12*eddies);
+                    }}else{{
+                        float cool=clamp(smoothstep(0.12,0.82,progress)+(temporalNoise(uSmokeTime,seed+43.8,7.4)-0.5)*0.18,0.0,1.0);
+                        flame=mix(vec3(1.0,0.48+0.14*heatShift,0.06),vec3(0.88+0.1*heatShift,0.10+0.08*heatShift,0.018),cool);
+                        flame*=0.88+0.12*eddies;
+                        opacity=0.76*edge*tail*flicker;
+                    }}
+                    gl_FragColor=vec4(flame,opacity);
+                }}else if(uIsShadow>0.5){{
+                    float radius=length(vWorldPosition.xz-uShadowCenter.xz);
+                    float edge=1.0-smoothstep(uShadowRadius*0.55,uShadowRadius,radius);
+                    gl_FragColor=vec4(vec3(0.12,0.09,0.07),edge*uShadowOpacity);
+                }}else if(uIsGround>0.5){{
+                    float broad=0.5+0.5*sin(vWorldPosition.x*0.0011+sin(vWorldPosition.z*0.0007))*cos(vWorldPosition.z*0.0013);
+                    float grain=fract(sin(dot(floor(vWorldPosition.xz*0.018),vec2(12.9898,78.233)))*43758.5453);
+                    float patch=0.5+0.5*sin(vWorldPosition.x*0.018+vWorldPosition.z*0.011)*cos(vWorldPosition.z*0.015-vWorldPosition.x*0.008);
+                    vec3 soil=mix(vec3(0.43,0.36,0.25),vec3(0.58,0.51,0.36),0.18+0.48*broad+0.20*grain);
+                    soil=mix(soil,vec3(0.34,0.37,0.25),patch*0.18);
+                    gl_FragColor=vec4(soil*groundLight,1.0);
+                }}else if(uIsVegetation>0.5){{
+                    float variation=fract(sin(dot(floor(vWorldPosition.xz*2.0),vec2(41.7,289.3)))*24634.6345);
+                    vec3 foliage=mix(vec3(0.16,0.22,0.10),vec3(0.37,0.38,0.18),variation);
+                    gl_FragColor=vec4(foliage*(0.32+0.68*sunDiffuse),1.0);
+                }}else{{
+                    float z=vModelPosition.z;
+                    float radius=length(vModelPosition.xy-uMeshCenter.xy);
+                    float whiteMask=max(smoothstep(41.0,46.0,radius),smoothstep(843.4,848.4,z));
+                    float blackRing=smoothstep(817.0,819.0,z)*(1.0-smoothstep(842.4,844.4,z));
+                    vec3 paint=mix(vec3(0.0,0.2039,0.4706),vec3(0.96,0.97,1.0),whiteMask);
+                    paint=mix(paint,vec3(0.012,0.016,0.024),blackRing);
+                    float finRegion=smoothstep(42.0,50.0,radius)*(1.0-smoothstep(125.0,140.0,radius))*(1.0-smoothstep(185.0,225.0,z));
+                    float shockBand=1.0-smoothstep(9.0,17.0,abs(z-112.0));
+                    float shockStrength=0.34*smoothstep(0.68,1.05,uMach)*finRegion*shockBand;
+                    paint=mix(paint,vec3(0.78,0.90,1.0),shockStrength);
+                    gl_FragColor=vec4(paint*rocketLight,1.0);
+                }}
+            }}
+        `;
+        const program=gl.createProgram(); gl.attachShader(program,shader(gl.VERTEX_SHADER,vertexSource.replace('uniform vec3 uMeshCenter;','uniform mediump vec3 uMeshCenter;'))); gl.attachShader(program,shader(gl.FRAGMENT_SHADER,rocketFragmentSource)); gl.linkProgram(program);
         if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program)||'WebGL program link failed');
         gl.useProgram(program);
-        const locations={{position:gl.getAttribLocation(program,'aPosition'),normal:gl.getAttribLocation(program,'aNormal'),mvp:gl.getUniformLocation(program,'uMvp'),quat:gl.getUniformLocation(program,'uQuaternion'),rocket:gl.getUniformLocation(program,'uRocketPosition'),center:gl.getUniformLocation(program,'uMeshCenter'),modelScale:gl.getUniformLocation(program,'uModelScale'),shadowCenter:gl.getUniformLocation(program,'uShadowCenter'),shadowRadius:gl.getUniformLocation(program,'uShadowRadius'),shadowOpacity:gl.getUniformLocation(program,'uShadowOpacity'),cloudOpacity:gl.getUniformLocation(program,'uCloudOpacity'),isRocket:gl.getUniformLocation(program,'uIsRocket'),isGround:gl.getUniformLocation(program,'uIsGround'),isShadow:gl.getUniformLocation(program,'uIsShadow'),isVegetation:gl.getUniformLocation(program,'uIsVegetation'),isCloud:gl.getUniformLocation(program,'uIsCloud'),color:gl.getUniformLocation(program,'uColor')}};
+        const locations={{position:gl.getAttribLocation(program,'aPosition'),normal:gl.getAttribLocation(program,'aNormal'),mvp:gl.getUniformLocation(program,'uMvp'),quat:gl.getUniformLocation(program,'uQuaternion'),rocket:gl.getUniformLocation(program,'uRocketPosition'),center:gl.getUniformLocation(program,'uMeshCenter'),modelScale:gl.getUniformLocation(program,'uModelScale'),shadowCenter:gl.getUniformLocation(program,'uShadowCenter'),shadowRadius:gl.getUniformLocation(program,'uShadowRadius'),shadowOpacity:gl.getUniformLocation(program,'uShadowOpacity'),plumeBaseZ:gl.getUniformLocation(program,'uPlumeBaseZ'),plumeLength:gl.getUniformLocation(program,'uPlumeLength'),plumeRootRadius:gl.getUniformLocation(program,'uPlumeRootRadius'),plumeTipRadius:gl.getUniformLocation(program,'uPlumeTipRadius'),plumeLayer:gl.getUniformLocation(program,'uPlumeLayer'),isRocket:gl.getUniformLocation(program,'uIsRocket'),isGround:gl.getUniformLocation(program,'uIsGround'),isShadow:gl.getUniformLocation(program,'uIsShadow'),isVegetation:gl.getUniformLocation(program,'uIsVegetation'),isPlume:gl.getUniformLocation(program,'uIsPlume'),color:gl.getUniformLocation(program,'uColor')}};
+        locations.mach=gl.getUniformLocation(program,'uMach');
+        locations.isEmber=gl.getUniformLocation(program,'uIsEmber');
+        locations.isSmoke=gl.getUniformLocation(program,'uIsSmoke');locations.smokeTime=gl.getUniformLocation(program,'uSmokeTime');
 
         const encoded=document.getElementById('rocketModel').textContent.trim();
         const compressed=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
@@ -571,7 +724,8 @@ class FlightReport:
             for(let vertex=0;vertex<3;vertex++) for(let axis=0;axis<3;axis++) {{ const value=view.getFloat32(base+vertex*12+axis*4,true); boundsMin[axis]=Math.min(boundsMin[axis],value); boundsMax[axis]=Math.max(boundsMax[axis],value); }}
         }}
         const meshCenter=boundsMin.map((v,i)=>(v+boundsMax[i])/2);
-        const modelScale=rocketHeight/(boundsMax[2]-boundsMin[2]);
+        const modelScale=0.001;
+        const rocketHeight=(boundsMax[2]-boundsMin[2])*modelScale;
         // Keep every source triangle. Striding through an STL face list is not
         // a valid mesh simplification: it discards neighboring faces and leaves
         // visible pinholes across the rocket surface.
@@ -587,8 +741,65 @@ class FlightReport:
             }}
         }}
         const rocketBuffer=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,rocketBuffer); gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW);
+        const plumeBaseZ=boundsMin[2],plumeLength=650,plumeRootRadius=18,plumeTipRadius=82,plumeSegments=56,plumeAxialSegments=30;
+        const smoothStep=(edge0,edge1,value)=>{{const t=Math.max(0,Math.min(1,(value-edge0)/(edge1-edge0)));return t*t*(3-2*t);}};
+        const hashNoise=(cell,seed)=>{{const value=Math.sin(cell*127.1+seed*311.7)*43758.5453;return value-Math.floor(value);}};
+        const temporalNoise=(time,seed,rate)=>{{const position=time*rate,cell=Math.floor(position),fraction=position-cell,smooth=fraction*fraction*(3-2*fraction);return hashNoise(cell,seed)*(1-smooth)+hashNoise(cell+1,seed)*smooth;}};
+        const buildFlameLayer=core=>{{
+            const progressScale=core?0.72:1.0,layerScale=core?0.56:1.0;
+            const values=new Float32Array(plumeAxialSegments*plumeSegments*6*6),count=values.length/6;
+            const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,values.byteLength,gl.DYNAMIC_DRAW);
+            const update=(time,length,directionX,directionY,sizeScale)=>{{
+                let cursor=0;
+                const vertex=(angle,progress)=>{{
+                    const expanding=smoothStep(0,0.48,progress),tail=1-smoothStep(0.78,1,progress);
+                    let radius=(plumeRootRadius+(plumeTipRadius-plumeRootRadius)*expanding)*tail*layerScale*sizeScale;
+                    if(core)radius*=1-smoothStep(0.58,0.72,progress);
+                    const amplitude=core?0.075:0.19,seed=angle*2.3+progress*19+(core?41:7);
+                    const wave=1+(temporalNoise(time,seed,5.4)-0.5)*amplitude*2+(temporalNoise(time,seed+17.2,11.7)-0.5)*amplitude*0.9;
+                    radius*=wave;
+                    const axialFlutter=1+(temporalNoise(time,seed+29.6,4.1)-0.5)*(core?0.024:0.075);
+                    const x=meshCenter[0]+Math.cos(angle)*radius+progress*length*directionX,y=meshCenter[1]+Math.sin(angle)*radius+progress*length*directionY,z=plumeBaseZ+3-progress*length*axialFlutter;
+                    values.set([x,y,z,Math.cos(angle),Math.sin(angle),0.12],cursor);cursor+=6;
+                }};
+                for(let row=0;row<plumeAxialSegments;row++){{
+                    const p0=row/plumeAxialSegments*progressScale,p1=(row+1)/plumeAxialSegments*progressScale;
+                    for(let segment=0;segment<plumeSegments;segment++){{
+                        const a0=segment/plumeSegments*Math.PI*2,a1=(segment+1)/plumeSegments*Math.PI*2;
+                        vertex(a0,p0);vertex(a1,p0);vertex(a1,p1);
+                        vertex(a0,p0);vertex(a1,p1);vertex(a0,p1);
+                    }}
+                }}
+                gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferSubData(gl.ARRAY_BUFFER,0,values);
+            }};
+            return {{buffer,count,update}};
+        }};
+        const outerFlame=buildFlameLayer(false),innerFlame=buildFlameLayer(true);
+        const smokeBuffer=gl.createBuffer();
+        const emberBuffer=gl.createBuffer();
         const groundSegments=200, groundExtent=1000, groundStep=groundExtent*2/groundSegments;
         const terrainHeight=(x,z)=>8*Math.sin(x*0.00065)*Math.cos(z*0.0007)+4*Math.sin((x+z)*0.0013)+0.8*Math.sin(x*0.01)*Math.cos(z*0.011);
+        const emitsSmoke=emission=>emission.state==='4'||(coastTransitionTime!==null&&emission.state==='5'&&emission.t<=coastTransitionTime+0.5);
+        const smokePuffs=samples.flatMap((emission,sampleIndex)=>{{
+            if(!emitsSmoke(emission)||(emission.alt||0)<=0.5)return[];
+            const quaternion=displayQuaternion(emission.q||[1,0,0,0]);
+            const rocketCenter=[0,terrainHeight(0,0)+Math.max(0,emission.alt||0)*altitudeDisplayScale+rocketHeight*0.5,0];
+            const nozzleOffset=rotateVector(quaternion,[0,0,(plumeBaseZ-meshCenter[2])*modelScale]);
+            const trailOffset=rotateVector(quaternion,[0,0,0.35]);
+            const center=[rocketCenter[0]+nozzleOffset[0]-trailOffset[0],rocketCenter[1]+nozzleOffset[1]-trailOffset[1],rocketCenter[2]+nozzleOffset[2]-trailOffset[2]];
+            const seed=((Math.round(emission.t*1000)*92821+12345)%1000)/1000,puffs=[{{t:emission.t,center,seed}}];
+            const next=samples[sampleIndex+1];
+            if(next&&emitsSmoke(next)&&(next.alt||0)>0.5){{
+                const nextQuaternion=displayQuaternion(next.q||[1,0,0,0]);
+                const nextRocketCenter=[0,terrainHeight(0,0)+Math.max(0,next.alt||0)*altitudeDisplayScale+rocketHeight*0.5,0];
+                const nextNozzleOffset=rotateVector(nextQuaternion,[0,0,(plumeBaseZ-meshCenter[2])*modelScale]);
+                const nextTrailOffset=rotateVector(nextQuaternion,[0,0,0.35]);
+                const nextCenter=[nextRocketCenter[0]+nextNozzleOffset[0]-nextTrailOffset[0],nextRocketCenter[1]+nextNozzleOffset[1]-nextTrailOffset[1],nextRocketCenter[2]+nextNozzleOffset[2]-nextTrailOffset[2]];
+                const midpoint=center.map((value,axis)=>(value+nextCenter[axis])*0.5);
+                puffs.push({{t:(emission.t+next.t)*0.5,center:midpoint,seed:(seed+0.43)%1}});
+            }}
+            return puffs;
+        }});
         const terrainNormal=(x,z)=>{{const step=6,dx=(terrainHeight(x+step,z)-terrainHeight(x-step,z))/(2*step),dz=(terrainHeight(x,z+step)-terrainHeight(x,z-step))/(2*step),length=Math.hypot(dx,1,dz);return[-dx/length,1/length,-dz/length];}};
         const groundVertices=new Float32Array(groundSegments*groundSegments*36); let groundCursor=0;
         const appendGroundVertex=(x,z)=>{{const normal=terrainNormal(x,z);groundVertices[groundCursor++]=x;groundVertices[groundCursor++]=terrainHeight(x,z);groundVertices[groundCursor++]=z;for(const component of normal)groundVertices[groundCursor++]=component;}};
@@ -636,12 +847,20 @@ class FlightReport:
             if(canvas.width!==Math.round(width*ratio)||canvas.height!==Math.round(height*ratio)){{canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);}}
             gl.viewport(0,0,canvas.width,canvas.height); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
             const visualAltitude=Math.max(0,sample.alt||0);
-            const rocketPosition=[0,visualAltitude,0];
-            // Track the rocket from a shallow side-on perspective. World
-            // positions remain in meters, so terrain recedes naturally with
-            // altitude instead of being compressed into an arbitrary scale.
+            const rocketPosition=[0,terrainHeight(0,0)+visualAltitude*altitudeDisplayScale+rocketHeight*0.5,0];
+            const qTelemetry=normalizeQ(sample.q||[1,0,0,0]);
+            const qDisplay=displayQuaternion(qTelemetry);
+            const forward=rotateVector(qDisplay,[0,0,1]);
+            const coastElapsed=coastTransitionTime===null?-1:sample.t-coastTransitionTime;
+            // Puffs stay fixed at their emission point. Hide a puff only while
+            // it is still ahead of the rocket along its current nose direction.
+            const activePuffs=smokePuffs.filter(puff=>{{
+                const age=sample.t-puff.t,puffRadius=0.085+age*0.18;
+                const alongForward=(puff.center[0]-rocketPosition[0])*forward[0]+(puff.center[1]-rocketPosition[1])*forward[1]+(puff.center[2]-rocketPosition[2])*forward[2];
+                return age>=0&&age<smokeLifetime&&alongForward<-(puffRadius+0.12);
+            }});
             const cameraDistance=8;
-            const target=[0,visualAltitude+0.45,0];
+            const target=[0,rocketPosition[1],0];
             const pitchRadians=(0.4+11.6*(visualAltitude/maximumAltitude))*Math.PI/180;
             const eye=[0,target[1]+Math.tan(pitchRadians)*cameraDistance,cameraDistance];
             const mvp=multiplyM(perspective(0.70,canvas.width/canvas.height,0.1,groundExtent*3),lookAt(eye,target,[0,1,0]));
@@ -655,20 +874,73 @@ class FlightReport:
             gl.depthMask(true);gl.disable(gl.BLEND);
             gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isVegetation,1);
             gl.bindBuffer(gl.ARRAY_BUFFER,vegetationBuffer);gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLES,0,vegetationVertices.length/6);
-            const qTelemetry=normalizeQ(sample.q||[1,0,0,0]);
             // Match the dashboard's FRD-to-Three conversion: re-express the
             // firmware quaternion by the frame similarity transform, then
             // apply the STL model's +Z-nose to +X base rotation. Composing an
             // NED/world transform directly here swaps the apparent pitch/roll.
-            const frameQuat=[Math.SQRT1_2,Math.SQRT1_2,0,0];
-            const frameQuatInv=[Math.SQRT1_2,-Math.SQRT1_2,0,0];
-            const modelBaseQuat=[Math.SQRT1_2,0,Math.SQRT1_2,0];
-            const qDisplay=normalizeQ(multiplyQ(multiplyQ(multiplyQ(frameQuat,qTelemetry),frameQuatInv),modelBaseQuat));
             // qDisplay uses firmware-style (w, x, y, z); the GLSL qrot helper
             // takes conventional vector-first (x, y, z, w).
-            gl.uniform1f(locations.isVegetation,0);gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isRocket,1);gl.uniform1f(locations.modelScale,modelScale); gl.uniform4f(locations.quat,qDisplay[1],qDisplay[2],qDisplay[3],qDisplay[0]); gl.uniform3f(locations.color,0.93,0.95,0.97);
+            const plumeVisible=coastTransitionTime===null?sample.state==='4':coastElapsed<0.5;
+            if(plumeVisible&&(sample.alt||0)>0.5){{
+                const lengthPulse=0.80+0.30*temporalNoise(sample.t,13.7,2.6)+0.12*(temporalNoise(sample.t,37.2,7.3)-0.5);
+                const plumeScale=coastElapsed>=0?Math.max(0,0.5*(1-coastElapsed/0.5)):1;
+                const activePlumeLength=plumeLength*lengthPulse*plumeScale;
+                const activePlumeRootRadius=plumeRootRadius*plumeScale,activePlumeTipRadius=plumeTipRadius*plumeScale;
+                const directionX=(temporalNoise(sample.t,21.4,3.3)-0.5)*0.075+(temporalNoise(sample.t,52.8,8.7)-0.5)*0.028;
+                const directionY=(temporalNoise(sample.t,32.6,2.9)-0.5)*0.065+(temporalNoise(sample.t,71.9,7.8)-0.5)*0.024;
+                gl.uniform1f(locations.isGround,0);gl.uniform1f(locations.isVegetation,0);gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isPlume,1);gl.uniform1f(locations.isRocket,1);
+                gl.uniform1f(locations.modelScale,modelScale);gl.uniform3f(locations.rocket,...rocketPosition);gl.uniform3f(locations.center,...meshCenter);
+                gl.uniform4f(locations.quat,qDisplay[1],qDisplay[2],qDisplay[3],qDisplay[0]);
+                gl.uniform1f(locations.plumeBaseZ,plumeBaseZ);gl.uniform1f(locations.plumeLength,activePlumeLength);gl.uniform1f(locations.plumeRootRadius,activePlumeRootRadius);gl.uniform1f(locations.plumeTipRadius,activePlumeTipRadius);
+                gl.uniform1f(locations.smokeTime,sample.t);
+                gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.disable(gl.DEPTH_TEST);
+                outerFlame.update(sample.t,activePlumeLength,directionX,directionY,plumeScale);innerFlame.update(sample.t,activePlumeLength,directionX,directionY,plumeScale);
+                gl.uniform1f(locations.plumeLayer,0);gl.bindBuffer(gl.ARRAY_BUFFER,outerFlame.buffer);gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLES,0,outerFlame.count);
+                gl.uniform1f(locations.plumeLayer,1);gl.bindBuffer(gl.ARRAY_BUFFER,innerFlame.buffer);gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLES,0,innerFlame.count);
+                const emberValues=[],emberCount=18,octahedronFaces=[[0,2,4],[2,1,4],[1,3,4],[3,0,4],[2,0,5],[1,2,5],[3,1,5],[0,3,5]];
+                for(let ember=0;ember<emberCount;ember++){{
+                    const phase=(ember*0.61803398875)%1,progress=0.58+0.37*temporalNoise(sample.t,phase*31+5.7,1.2),angle=phase*Math.PI*2+(temporalNoise(sample.t,phase*43+11,3.4)-0.5)*2.4;
+                    const expanding=smoothStep(0,0.48,progress),tail=1-smoothStep(0.78,1,progress),envelope=(activePlumeRootRadius+(activePlumeTipRadius-activePlumeRootRadius)*expanding)*tail;
+                    const radial=envelope*(0.52+0.40*temporalNoise(sample.t,phase*67+19,5.2)),px=meshCenter[0]+Math.cos(angle)*radial+progress*activePlumeLength*directionX,py=meshCenter[1]+Math.sin(angle)*radial+progress*activePlumeLength*directionY,pz=plumeBaseZ+3-progress*activePlumeLength;
+                    const size=(11+14*temporalNoise(sample.t,phase*79+23,8.1))*plumeScale,vertices=[[0,size*1.8,0],[size,0,0],[0,0,size*1.4],[-size,0,0],[0,0,-size*1.4],[0,-size*1.8,0]];
+                    for(const face of octahedronFaces){{
+                        const a=vertices[face[0]],b=vertices[face[1]],c=vertices[face[2]],u=[b[0]-a[0],b[1]-a[1],b[2]-a[2]],v=[c[0]-a[0],c[1]-a[1],c[2]-a[2]],normal=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]],norm=Math.hypot(...normal)||1;
+                        for(const point of [a,b,c])emberValues.push(px+point[0],py+point[1],pz+point[2],normal[0]/norm,normal[1]/norm,normal[2]/norm);
+                    }}
+                }}
+                gl.uniform1f(locations.isPlume,0);gl.uniform1f(locations.isEmber,1);gl.bindBuffer(gl.ARRAY_BUFFER,emberBuffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(emberValues),gl.DYNAMIC_DRAW);gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLES,0,emberValues.length/6);gl.uniform1f(locations.isEmber,0);
+                gl.enable(gl.DEPTH_TEST);gl.depthMask(true);gl.disable(gl.BLEND);
+            }}
+            gl.uniform1f(locations.isPlume,0);
+            gl.uniform1f(locations.isVegetation,0);gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isRocket,1);gl.uniform1f(locations.modelScale,modelScale);gl.uniform1f(locations.mach,sample.mach??0); gl.uniform4f(locations.quat,qDisplay[1],qDisplay[2],qDisplay[3],qDisplay[0]); gl.uniform3f(locations.color,0.93,0.95,0.97);
             gl.bindBuffer(gl.ARRAY_BUFFER,rocketBuffer); gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0); gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);
             gl.drawArrays(gl.TRIANGLES,0,vertices.length/6);
+            const smokeValues=[];
+            const appendSmokePuff=(center,age,seed)=>{{
+                const ageRatio=age/smokeLifetime, rx=0.075+age*0.19, ry=0.085+age*0.18, rz=0.075+age*0.19;
+                const latitudeSegments=4,longitudeSegments=8;
+                const appendVertex=(latitude,longitude)=>{{
+                    const unit=[Math.cos(latitude)*Math.cos(longitude),Math.sin(latitude),Math.cos(latitude)*Math.sin(longitude)];
+                    smokeValues.push(center[0]+unit[0]*rx,center[1]+unit[1]*ry,center[2]+unit[2]*rz,ageRatio,seed,0);
+                }};
+                for(let latitude=0;latitude<latitudeSegments;latitude++)for(let longitude=0;longitude<longitudeSegments;longitude++){{
+                    const lat0=-Math.PI/2+latitude*Math.PI/latitudeSegments,lat1=-Math.PI/2+(latitude+1)*Math.PI/latitudeSegments;
+                    const lon0=longitude*2*Math.PI/longitudeSegments,lon1=(longitude+1)*2*Math.PI/longitudeSegments;
+                    appendVertex(lat0,lon0);appendVertex(lat1,lon0);appendVertex(lat1,lon1);
+                    appendVertex(lat0,lon0);appendVertex(lat1,lon1);appendVertex(lat0,lon1);
+                }}
+            }};
+            for(const puff of activePuffs){{
+                const age=sample.t-puff.t;
+                appendSmokePuff(puff.center,age,puff.seed);
+            }}
+            if(smokeValues.length){{
+                gl.uniform1f(locations.isRocket,0);gl.uniform1f(locations.isPlume,0);gl.uniform1f(locations.isSmoke,1);gl.uniform1f(locations.smokeTime,sample.t);
+                gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
+                gl.bindBuffer(gl.ARRAY_BUFFER,smokeBuffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(smokeValues),gl.DYNAMIC_DRAW);
+                gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);
+                gl.drawArrays(gl.TRIANGLES,0,smokeValues.length/6);gl.depthMask(true);gl.disable(gl.BLEND);gl.uniform1f(locations.isSmoke,0);
+            }}
         }};
         status.textContent='';
         setIndex(0);
@@ -680,10 +952,11 @@ class FlightReport:
         const first=samples[lower], second=samples[upper];
         const time=first.t+(second.t-first.t)*fraction;
         const altitude=first.alt==null?second.alt:(second.alt==null?first.alt:first.alt+(second.alt-first.alt)*fraction);
+        const mach=first.mach==null?second.mach:(second.mach==null?first.mach:first.mach+(second.mach-first.mach)*fraction);
         const e=(first.e||[]).map((angle,axis)=>{{const end=(second.e||first.e)[axis]??angle;const delta=((end-angle+540)%360)-180;return angle+delta*fraction;}});
         let q1=first.q||[1,0,0,0], q2=second.q||q1;
         if(q1.reduce((sum,value,component)=>sum+value*q2[component],0)<0) q2=q2.map(value=>-value);
-        const sample={{t:time,alt:altitude,e,q:normalizeQ(q1.map((value,component)=>value+(q2[component]-value)*fraction))}};
+        const sample={{t:time,alt:altitude,mach,e,q:normalizeQ(q1.map((value,component)=>value+(q2[component]-value)*fraction)),state:fraction<0.5?first.state:second.state}};
         document.getElementById('viewerTime').textContent=time.toFixed(2)+' s';
         document.getElementById('viewerAltitude').textContent=altitude==null?'Unavailable':Number(altitude).toFixed(1)+' m ('+(Number(altitude) * 3.28084).toFixed(1)+' ft)';
         document.getElementById('viewerEuler').textContent=(sample.e||[]).map(v=>Number(v).toFixed(1)+'°').join(', ');
