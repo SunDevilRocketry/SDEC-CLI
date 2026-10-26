@@ -99,7 +99,7 @@ class FlightReport:
             )
             if pressure is not None and pressure > 0 and baro_temperature is not None:
                 calculated_altitude = isa_get_altitude_qnh(
-                    pressure, baro_temperature
+                    pressure, None
                 )
                 baro_altitude = (
                     calculated_altitude if math.isfinite(calculated_altitude) else logged_baro_altitude
@@ -423,12 +423,17 @@ class FlightReport:
         start_time, end_time = min(times), max(times)
         if math.isclose(start_time, end_time):
             end_time = start_time + 1.0
+        clip_id = "plot-clip-" + "".join(
+            character.lower() if character.isalnum() else "-" for character in title
+        )
 
         parts = [
             f'<article class="chart"><h3>{html.escape(title)}</h3>',
             f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)} over time" '
             f'data-time-min="{start_time:.8f}" data-time-max="{end_time:.8f}" '
+            f'data-full-time-min="{start_time:.8f}" data-full-time-max="{end_time:.8f}" '
             f'data-plot-left="{left}" data-plot-right="{width-right}">',
+            f'<defs><clipPath id="{clip_id}"><rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}"/></clipPath></defs>',
         ]
         for tick in range(5):
             fraction = tick / 4
@@ -440,12 +445,13 @@ class FlightReport:
             fraction = tick / 4
             x = left + plot_width * fraction
             value = start_time + (end_time - start_time) * fraction
-            parts.append(f'<text class="axis" x="{x:.1f}" y="{height-15}" text-anchor="middle">{value:.1f}</text>')
+            parts.append(f'<text class="axis time-tick" data-time-fraction="{fraction:.2f}" x="{x:.1f}" y="{height-15}" text-anchor="middle">{value:.1f}</text>')
         parts.append(f'<text class="axis-title" x="{width/2}" y="{height-2}" text-anchor="middle">Time (s)</text>')
         parts.append(f'<text class="axis-title" transform="translate(17 {height/2}) rotate(-90)" text-anchor="middle">{html.escape(unit)}</text>')
 
         for label, color, values in series:
             coordinates = []
+            point_times = []
             for timestamp, value in zip(times, values):
                 if value is None:
                     continue
@@ -453,8 +459,9 @@ class FlightReport:
                 y_fraction = 0.5 if value_range == 0 else (high - value) / value_range
                 y = top + y_fraction * plot_height
                 coordinates.append(f"{x:.1f},{y:.1f}")
+                point_times.append(f"{timestamp:.8f}")
             if coordinates:
-                parts.append(f'<polyline fill="none" stroke="{color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="{" ".join(coordinates)}"/>')
+                parts.append(f'<polyline class="chart-series" clip-path="url(#{clip_id})" data-times="{" ".join(point_times)}" fill="none" stroke="{color}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" points="{" ".join(coordinates)}"/>')
                 parts.append(f'<line x1="{left+10}" y1="{top-16}" x2="{left+30}" y2="{top-16}" stroke="{color}" stroke-width="3"/>')
                 parts.append(f'<text class="legend" x="{left+36}" y="{top-12}">{html.escape(label)}</text>')
         parts.append(
@@ -490,7 +497,7 @@ class FlightReport:
   <style>
     :root {{ color-scheme:light; --ink:#202a33; --muted:#5d6a75; --line:#d8dee3; --grid:#e7ebee; --accent:#176b87; --paper:#fff; }}
     * {{ box-sizing:border-box; }}
-    body {{ margin:0; padding-bottom:calc(70px + env(safe-area-inset-bottom,0px)); background:var(--paper); color:var(--ink); font:15px/1.55 Arial,Helvetica,sans-serif; }}
+    body {{ margin:0; padding-bottom:calc(110px + env(safe-area-inset-bottom,0px)); background:var(--paper); color:var(--ink); font:15px/1.55 Arial,Helvetica,sans-serif; }}
     main {{ width:min(1080px,calc(100% - 40px)); margin:0 auto; padding:38px 0 56px; }}
     header {{ padding-bottom:20px; border-bottom:2px solid var(--ink); }} h1 {{ margin:0; font-size:clamp(30px,4vw,42px); line-height:1.15; letter-spacing:-.025em; }}
     .subtitle {{ margin:8px 0 0; color:var(--muted); font-size:16px; }} h2 {{ margin:0 0 14px; font-size:22px; }} h3 {{ margin:0 0 8px; font-size:16px; }}
@@ -505,8 +512,10 @@ class FlightReport:
     .viewer {{ border:1px solid var(--line); padding:14px; }} .viewer-grid {{ display:grid; grid-template-columns:minmax(0,1.7fr) minmax(210px,.6fr); gap:16px; }}
     canvas {{ width:100%; height:430px; display:block; border:1px solid #cbd5dc; background:linear-gradient(180deg,#559ed1 0%,#83c4e5 48%,#d8e6e8 78%,#e5d9bd 100%); }} .viewer-side {{ display:flex; flex-direction:column; gap:12px; }}
     .telemetry {{ border:1px solid var(--line); padding:12px; }} .telemetry dt {{ color:var(--muted); font-size:13px; }} .telemetry dd {{ margin:2px 0 13px; font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; }}
-    .control-row {{ position:fixed; z-index:20; right:0; bottom:0; left:0; display:flex; align-items:center; gap:12px; margin:0; padding:10px max(12px,calc((100vw - 1080px)/2)); padding-bottom:calc(10px + env(safe-area-inset-bottom,0px)); border-top:1px solid var(--line); background:rgba(255,255,255,.97); box-shadow:0 -3px 14px rgba(24,39,50,.14); }}
-    .control-row button {{ flex:0 0 auto; }} .control-row input[type=range] {{ min-width:0; width:100%; accent-color:var(--accent); }}
+    .control-row {{ position:fixed; z-index:20; right:0; bottom:0; left:0; display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; margin:0; padding:10px max(12px,calc((100vw - 1080px)/2)); padding-bottom:calc(10px + env(safe-area-inset-bottom,0px)); border-top:1px solid var(--line); background:rgba(255,255,255,.97); box-shadow:0 -3px 14px rgba(24,39,50,.14); }}
+    .control-row button {{ flex:0 0 auto; }} .control-row input[type=range] {{ flex:1 1 220px; min-width:0; width:100%; accent-color:var(--accent); }}
+    .range-config {{ display:flex; flex:0 0 auto; align-items:center; gap:8px; }} .range-config label {{ display:flex; align-items:center; gap:4px; color:var(--muted); font-size:12px; white-space:nowrap; }}
+    .range-config input {{ width:88px; padding:5px 6px; border:1px solid #aeb9c1; border-radius:3px; color:var(--ink); font:inherit; font-size:13px; font-variant-numeric:tabular-nums; }}
     button {{ padding:7px 14px; border:1px solid #75838d; border-radius:3px; color:var(--ink); background:#fff; font:inherit; cursor:pointer; }} button:hover {{ background:#f1f4f6; }}
     .viewer-status {{ min-height:1.5em; color:#963c17; font-size:13px; }} .note {{ margin-top:14px; color:var(--muted); font-size:13px; }}
     footer {{ margin-top:30px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }}
@@ -540,7 +549,7 @@ class FlightReport:
         <div class="viewer"><div class="viewer-grid">
             <div><canvas id="rocketCanvas" aria-label="Three-dimensional Nautilus rocket flight playback"></canvas><div id="viewerStatus" class="viewer-status" role="status"></div></div>
             <div class="viewer-side"><dl class="telemetry"><dt>Time from launch</dt><dd id="viewerTime">—</dd><dt>Altitude AGL</dt><dd id="viewerAltitude">—</dd><dt>Euler angles — yaw, pitch, roll (°)</dt><dd id="viewerEuler">—</dd><dt>Quaternion (w, x, y, z)</dt><dd id="viewerQuaternion">—</dd></dl></div>
-        </div><div class="control-row" id="playbackDock" role="group" aria-label="Flight playback controls"><button id="playButton" type="button">Play</button><input id="timeSlider" type="range" min="0" max="0" step="any" value="0" aria-label="Scrub flight time"></div></div>
+        </div><div class="control-row" id="playbackDock" role="group" aria-label="Flight playback controls"><button id="playButton" type="button">Play</button><div class="range-config" aria-label="Playback time range"><label for="rangeMin">From (s)<input id="rangeMin" type="number" step="0.1"></label><label for="rangeMax">To (s)<input id="rangeMax" type="number" step="0.1"></label></div><input id="timeSlider" type="range" min="0" max="0" step="any" value="0" aria-label="Scrub flight time"></div></div>
     </section>
 </main>
 <script id="flightSamples" type="application/json">{viewer_json}</script>
@@ -551,15 +560,44 @@ class FlightReport:
     const canvas = document.getElementById('rocketCanvas');
     const gl = canvas.getContext('webgl', {{ antialias:true, alpha:true }});
     const slider = document.getElementById('timeSlider');
+    const rangeMinInput = document.getElementById('rangeMin');
+    const rangeMaxInput = document.getElementById('rangeMax');
     const playButton = document.getElementById('playButton');
     const status = document.getElementById('viewerStatus');
     const cursors = Array.from(document.querySelectorAll('.time-cursor'));
     let index = 0, playing = false, playbackStartTimestamp = null, playbackStartTime = 0, drawScene = null;
     slider.max = String(Math.max(samples.length - 1, 0));
+    const fullStartTime=samples[0]?.t??0, fullEndTime=samples[samples.length-1]?.t??1;
+    let rangeStartTime=fullStartTime, rangeEndTime=fullEndTime;
+    let rangeStartIndex=0, rangeEndIndex=samples.length-1;
+    rangeMinInput.min=String(fullStartTime);rangeMinInput.max=String(fullEndTime);rangeMinInput.value=rangeStartTime.toFixed(2);
+    rangeMaxInput.min=String(fullStartTime);rangeMaxInput.max=String(fullEndTime);rangeMaxInput.value=rangeEndTime.toFixed(2);
     const maximumAltitude=Math.max(1,...samples.map(sample=>Math.max(0,sample.alt||0)));
     const altitudeDisplayScale=1, smokeLifetime=3.5;
     const coastTransitionSample=samples.find((sample,index)=>index>0&&samples[index-1].state==='4'&&sample.state==='5');
     const coastTransitionTime=coastTransitionSample?.t??null;
+
+    function updateChartRange(){{
+        for(const svg of document.querySelectorAll('.chart svg[data-full-time-min]')){{
+            const plotLeft=Number(svg.dataset.plotLeft),plotRight=Number(svg.dataset.plotRight);
+            const plotWidth=plotRight-plotLeft,span=rangeEndTime-rangeStartTime||1;
+            svg.dataset.timeMin=String(rangeStartTime);svg.dataset.timeMax=String(rangeEndTime);
+            for(const tick of svg.querySelectorAll('.time-tick')){{
+                const fraction=Number(tick.dataset.timeFraction);
+                tick.textContent=(rangeStartTime+span*fraction).toFixed(1);
+            }}
+            for(const series of svg.querySelectorAll('.chart-series')){{
+                const times=series.dataset.times.split(' ').map(Number);
+                const oldPoints=series.getAttribute('points').trim().split(/\\s+/);
+                const points=times.map((time,pointIndex)=>{{
+                    const y=oldPoints[pointIndex].split(',')[1];
+                    const x=plotLeft+(time-rangeStartTime)/span*plotWidth;
+                    return x.toFixed(1)+','+y;
+                }});
+                series.setAttribute('points',points.join(' '));
+            }}
+        }}
+    }}
 
     const multiplyQ = (a,b) => [
         a[0]*b[0]-a[1]*b[1]-a[2]*b[2]-a[3]*b[3],
@@ -947,7 +985,7 @@ class FlightReport:
     }}
     function setIndex(value) {{
         if(!samples.length) return;
-        index=Math.max(0,Math.min(samples.length-1,value)); slider.value=String(index);
+        index=Math.max(rangeStartIndex,Math.min(rangeEndIndex,value)); slider.value=String(index);
         const lower=Math.floor(index), upper=Math.min(lower+1,samples.length-1), fraction=index-lower;
         const first=samples[lower], second=samples[upper];
         const time=first.t+(second.t-first.t)*fraction;
@@ -980,21 +1018,48 @@ class FlightReport:
         const lower=Math.floor(position), upper=Math.min(lower+1,samples.length-1), fraction=position-lower;
         return samples[lower].t+(samples[upper].t-samples[lower].t)*fraction;
     }}
+    function updatePlaybackRange(changedBound){{
+        const minimumSpan=Math.min(0.1,fullEndTime-fullStartTime);
+        if(changedBound==='min'){{
+            const requested=Number(rangeMinInput.value);
+            rangeStartTime=Math.max(fullStartTime,Math.min(Number.isFinite(requested)?requested:fullStartTime,rangeEndTime-minimumSpan));
+        }}else{{
+            const requested=Number(rangeMaxInput.value);
+            rangeEndTime=Math.min(fullEndTime,Math.max(Number.isFinite(requested)?requested:fullEndTime,rangeStartTime+minimumSpan));
+        }}
+        rangeMinInput.value=rangeStartTime.toFixed(2);rangeMaxInput.value=rangeEndTime.toFixed(2);
+        rangeStartIndex=indexAtTime(rangeStartTime);rangeEndIndex=indexAtTime(rangeEndTime);
+        slider.min=String(rangeStartIndex);slider.max=String(rangeEndIndex);
+        rangeMinInput.min=String(fullStartTime);rangeMinInput.max=String(rangeEndTime-minimumSpan);
+        rangeMaxInput.min=String(rangeStartTime+minimumSpan);rangeMaxInput.max=String(fullEndTime);
+        updateChartRange();
+        const currentTime=sampleTimeAtIndex(index);
+        if(currentTime<rangeStartTime||currentTime>rangeEndTime){{
+            playing=false;playbackStartTimestamp=null;playButton.textContent='Play';
+            setIndex(indexAtTime(currentTime<rangeStartTime?rangeStartTime:rangeEndTime));
+        }}else if(playing){{
+            playbackStartTimestamp=null;
+        }}
+    }}
+    rangeMinInput.addEventListener('change',()=>updatePlaybackRange('min'));
+    rangeMaxInput.addEventListener('change',()=>updatePlaybackRange('max'));
     slider.addEventListener('input',()=>{{playing=false;playbackStartTimestamp=null;playButton.textContent='Play';setIndex(Number(slider.value));}});
     playButton.addEventListener('click',()=>{{
         if(playing){{playing=false;playbackStartTimestamp=null;playButton.textContent='Play';return;}}
-        if(index>=samples.length-1)setIndex(0);
+        if(index<rangeStartIndex||index>=rangeEndIndex)setIndex(rangeStartIndex);
         playing=true;playbackStartTimestamp=null;playButton.textContent='Pause';requestAnimationFrame(animate);
     }});
     function animate(timestamp){{
         if(!playing)return;
         if(playbackStartTimestamp===null){{playbackStartTimestamp=timestamp;playbackStartTime=sampleTimeAtIndex(index);}}
         const targetTime=playbackStartTime+(timestamp-playbackStartTimestamp)/1000;
-        if(targetTime>=samples[samples.length-1].t){{setIndex(samples.length-1);playing=false;playbackStartTimestamp=null;playButton.textContent='Play';return;}}
+        if(targetTime<rangeStartTime){{setIndex(rangeStartIndex);playing=false;playbackStartTimestamp=null;playButton.textContent='Play';return;}}
+        if(targetTime>=rangeEndTime){{setIndex(rangeEndIndex);playing=false;playbackStartTimestamp=null;playButton.textContent='Play';return;}}
         setIndex(indexAtTime(targetTime));
         requestAnimationFrame(animate);
     }}
-    window.addEventListener('resize',()=>{{if(drawScene)drawScene(samples[index]);}});
+    updatePlaybackRange('min');
+    window.addEventListener('resize',()=>{{if(drawScene)setIndex(index);}});
     initialize().catch(error=>{{status.textContent='3D model could not be loaded: '+error.message;}});
 }})();
 </script>
