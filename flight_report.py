@@ -504,7 +504,7 @@ class FlightReport:
         <div class="viewer"><div class="viewer-grid">
             <div><canvas id="rocketCanvas" aria-label="Three-dimensional Nautilus rocket flight playback"></canvas><div id="viewerStatus" class="viewer-status" role="status"></div></div>
             <div class="viewer-side"><dl class="telemetry"><dt>Time from launch</dt><dd id="viewerTime">—</dd><dt>Altitude AGL</dt><dd id="viewerAltitude">—</dd><dt>Euler angles — yaw, pitch, roll (°)</dt><dd id="viewerEuler">—</dd><dt>Quaternion (w, x, y, z)</dt><dd id="viewerQuaternion">—</dd></dl></div>
-        </div><div class="control-row" id="playbackDock" role="group" aria-label="Flight playback controls"><button id="playButton" type="button">Play</button><input id="timeSlider" type="range" min="0" max="0" value="0" aria-label="Scrub flight time"></div></div>
+        </div><div class="control-row" id="playbackDock" role="group" aria-label="Flight playback controls"><button id="playButton" type="button">Play</button><input id="timeSlider" type="range" min="0" max="0" step="any" value="0" aria-label="Scrub flight time"></div></div>
     </section>
 </main>
 <script id="flightSamples" type="application/json">{viewer_json}</script>
@@ -518,7 +518,7 @@ class FlightReport:
     const playButton = document.getElementById('playButton');
     const status = document.getElementById('viewerStatus');
     const cursors = Array.from(document.querySelectorAll('.time-cursor'));
-    let index = 0, playing = false, lastTick = 0, drawScene = null;
+    let index = 0, playing = false, playbackStartTimestamp = null, playbackStartTime = 0, drawScene = null;
     slider.max = String(Math.max(samples.length - 1, 0));
     const maximumAltitude=Math.max(1,...samples.map(sample=>Math.max(0,sample.alt||0)));
     const rocketHeight=1.2192;
@@ -643,9 +643,16 @@ class FlightReport:
     function setIndex(value) {{
         if(!samples.length) return;
         index=Math.max(0,Math.min(samples.length-1,value)); slider.value=String(index);
-        const sample=samples[index], time=Number(sample.t)||0;
+        const lower=Math.floor(index), upper=Math.min(lower+1,samples.length-1), fraction=index-lower;
+        const first=samples[lower], second=samples[upper];
+        const time=first.t+(second.t-first.t)*fraction;
+        const altitude=first.alt==null?second.alt:(second.alt==null?first.alt:first.alt+(second.alt-first.alt)*fraction);
+        const e=(first.e||[]).map((angle,axis)=>{{const end=(second.e||first.e)[axis]??angle;const delta=((end-angle+540)%360)-180;return angle+delta*fraction;}});
+        let q1=first.q||[1,0,0,0], q2=second.q||q1;
+        if(q1.reduce((sum,value,component)=>sum+value*q2[component],0)<0) q2=q2.map(value=>-value);
+        const sample={{t:time,alt:altitude,e,q:normalizeQ(q1.map((value,component)=>value+(q2[component]-value)*fraction))}};
         document.getElementById('viewerTime').textContent=time.toFixed(2)+' s';
-        document.getElementById('viewerAltitude').textContent=sample.alt==null?'Unavailable':Number(sample.alt).toFixed(1)+' m ('+(Number(sample.alt) * 3.28084).toFixed(1)+' ft)';
+        document.getElementById('viewerAltitude').textContent=altitude==null?'Unavailable':Number(altitude).toFixed(1)+' m ('+(Number(altitude) * 3.28084).toFixed(1)+' ft)';
         document.getElementById('viewerEuler').textContent=(sample.e||[]).map(v=>Number(v).toFixed(1)+'°').join(', ');
         document.getElementById('viewerQuaternion').textContent=(sample.q||[]).map(v=>Number(v).toFixed(3)).join(', ');
         for(const line of cursors){{
@@ -655,9 +662,32 @@ class FlightReport:
         }}
         if(drawScene) drawScene(sample);
     }}
-    slider.addEventListener('input',()=>{{playing=false;playButton.textContent='Play';setIndex(Number(slider.value));}});
-    playButton.addEventListener('click',()=>{{playing=!playing;lastTick=0;playButton.textContent=playing?'Pause':'Play';if(playing)requestAnimationFrame(animate);}});
-    function animate(timestamp){{if(!playing)return;if(!lastTick)lastTick=timestamp;if(timestamp-lastTick>55){{lastTick=timestamp;if(index>=samples.length-1){{playing=false;playButton.textContent='Play';return;}}setIndex(index+1);}}requestAnimationFrame(animate);}}
+    function indexAtTime(time){{
+        if(time<=samples[0].t) return 0;
+        if(time>=samples[samples.length-1].t) return samples.length-1;
+        let lower=0, upper=samples.length-1;
+        while(upper-lower>1){{const middle=Math.floor((lower+upper)/2);if(samples[middle].t<=time)lower=middle;else upper=middle;}}
+        const span=samples[upper].t-samples[lower].t;
+        return lower+(span>0?(time-samples[lower].t)/span:0);
+    }}
+    function sampleTimeAtIndex(position){{
+        const lower=Math.floor(position), upper=Math.min(lower+1,samples.length-1), fraction=position-lower;
+        return samples[lower].t+(samples[upper].t-samples[lower].t)*fraction;
+    }}
+    slider.addEventListener('input',()=>{{playing=false;playbackStartTimestamp=null;playButton.textContent='Play';setIndex(Number(slider.value));}});
+    playButton.addEventListener('click',()=>{{
+        if(playing){{playing=false;playbackStartTimestamp=null;playButton.textContent='Play';return;}}
+        if(index>=samples.length-1)setIndex(0);
+        playing=true;playbackStartTimestamp=null;playButton.textContent='Pause';requestAnimationFrame(animate);
+    }});
+    function animate(timestamp){{
+        if(!playing)return;
+        if(playbackStartTimestamp===null){{playbackStartTimestamp=timestamp;playbackStartTime=sampleTimeAtIndex(index);}}
+        const targetTime=playbackStartTime+(timestamp-playbackStartTimestamp)/1000;
+        if(targetTime>=samples[samples.length-1].t){{setIndex(samples.length-1);playing=false;playbackStartTimestamp=null;playButton.textContent='Play';return;}}
+        setIndex(indexAtTime(targetTime));
+        requestAnimationFrame(animate);
+    }}
     window.addEventListener('resize',()=>{{if(drawScene)drawScene(samples[index]);}});
     initialize().catch(error=>{{status.textContent='3D model could not be loaded: '+error.message;}});
 }})();
