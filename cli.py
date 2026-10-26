@@ -8,6 +8,8 @@ import shlex
 import sys
 import time
 
+from datetime import datetime
+from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import NestedCompleter
 from prompt_toolkit.history import InMemoryHistory
@@ -19,6 +21,8 @@ from SDECv2.Parser import Parser, create_configs, Telemetry
 from SDECv2.SerialController import SerialObj, Status
 from SDECv2.Exceptions import InvalidDataError, MissingDataError, ParserError, SerialError, ComportError, SDECError
 
+from flight_report import FlightReport
+
 COMMANDS = [
     "sensor_dump",
     "sensor_poll",
@@ -27,6 +31,7 @@ COMMANDS = [
     "lora",
     "dashboard_dump",
     "list_comports",
+    "postprocess",
     "connect",
     "disconnect",
     "help",
@@ -58,6 +63,7 @@ class Cli:
                 "lora":          {"preset": {"upload": None, "download": None}},
                 "dashboard_dump": None,
                 "list_comports": None,
+                "postprocess":   None,
                 "connect":       {port for port in self.serial_connection.available_comports()},
                 "disconnect":    None,
                 "quit":          None,
@@ -542,6 +548,50 @@ class Cli:
                             self.appa_parser.download_lora_preset(self.serial_connection, path=args.path)
                         except SDECError as e:
                             print(f"Command failed: {e}")
+
+    def do_postprocess(self, line):
+        """
+        Post-process flight data.
+        Usage:
+            postprocess
+        """
+        try:
+            # Take relevant inputs
+            preset_file = input("Preset File (or press enter to use default): ")
+            data_file = input("Data File (or press enter to use default): ")
+            output_file = input("Output File (or press enter to use default): ")
+            flight_name = input("Flight Name (or press enter to use default): ")
+            flight_date = input("Flight Date (or press enter to use default): ")
+
+            # Replace invalid values with defaults
+            if( preset_file == "" or not Path(preset_file).is_file() ):
+                print("Replaced preset file with default.")
+                preset_file = "a_output/extracted_preset.json"
+
+            if( data_file == "" or not Path(data_file).is_file() ):
+                print("Replaced data file with default.")
+                data_file = "a_output/extracted_data.csv"
+
+            if( output_file == "" ):
+                print("Replaced output file with default.")
+                output_file = "a_output/report.html"
+
+            if( flight_name == "" ):
+                print("Replaced flight name with default.")
+                flight_name = "SDR"
+
+            if( flight_date == "" ):
+                print("Replaced flight date with current.")
+                now = datetime.now()
+
+                # Format as a string (YYYY-MM-DD)
+                flight_date = now.strftime("%Y-%m-%d")
+
+            FlightReport().generate(preset_file, data_file, output_file, flight_name, flight_date)
+        except Exception as e:
+            print(f"Post-processing failed: {str(e)}")
+        return True
+
 
     def do_quit(self, line):
         """
