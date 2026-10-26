@@ -467,7 +467,7 @@ class FlightReport:
     .grid {{ stroke:var(--grid); stroke-width:1; }} .axis,.legend {{ fill:#505d67; font-size:11px; }} .axis-title {{ fill:#35434d; font-size:12px; }}
     .time-cursor {{ stroke:#c2410c; stroke-width:2; stroke-dasharray:5 4; pointer-events:none; }}
     .viewer {{ border:1px solid var(--line); padding:14px; }} .viewer-grid {{ display:grid; grid-template-columns:minmax(0,1.7fr) minmax(210px,.6fr); gap:16px; }}
-    canvas {{ width:100%; height:430px; display:block; border:1px solid #cbd5dc; background:#87c7eb; }} .viewer-side {{ display:flex; flex-direction:column; gap:12px; }}
+    canvas {{ width:100%; height:430px; display:block; border:1px solid #cbd5dc; background:linear-gradient(180deg,#559ed1 0%,#83c4e5 48%,#d8e6e8 78%,#e5d9bd 100%); }} .viewer-side {{ display:flex; flex-direction:column; gap:12px; }}
     .telemetry {{ border:1px solid var(--line); padding:12px; }} .telemetry dt {{ color:var(--muted); font-size:13px; }} .telemetry dd {{ margin:2px 0 13px; font-size:19px; font-weight:600; font-variant-numeric:tabular-nums; }}
     .control-row {{ position:fixed; z-index:20; right:0; bottom:0; left:0; display:flex; align-items:center; gap:12px; margin:0; padding:10px max(12px,calc((100vw - 1080px)/2)); padding-bottom:calc(10px + env(safe-area-inset-bottom,0px)); border-top:1px solid var(--line); background:rgba(255,255,255,.97); box-shadow:0 -3px 14px rgba(24,39,50,.14); }}
     .control-row button {{ flex:0 0 auto; }} .control-row input[type=range] {{ min-width:0; width:100%; accent-color:var(--accent); }}
@@ -513,7 +513,7 @@ class FlightReport:
 (() => {{
     const samples = JSON.parse(document.getElementById('flightSamples').textContent);
     const canvas = document.getElementById('rocketCanvas');
-    const gl = canvas.getContext('webgl', {{ antialias:true, alpha:false }});
+    const gl = canvas.getContext('webgl', {{ antialias:true, alpha:true }});
     const slider = document.getElementById('timeSlider');
     const playButton = document.getElementById('playButton');
     const status = document.getElementById('viewerStatus');
@@ -555,11 +555,11 @@ class FlightReport:
         if (!gl) throw new Error('WebGL is unavailable in this browser.');
         if (!window.DecompressionStream) throw new Error('This browser cannot decompress the embedded STL model. Use a current browser.');
         const vertexSource='attribute vec3 aPosition; attribute vec3 aNormal; uniform mat4 uMvp; uniform vec4 uQuaternion; uniform vec3 uRocketPosition; uniform vec3 uMeshCenter; uniform float uModelScale; uniform mediump vec3 uShadowCenter; uniform mediump float uShadowRadius; uniform mediump float uIsShadow; uniform float uIsRocket; varying vec3 vNormal; varying vec3 vWorldPosition; varying mediump vec3 vModelPosition; vec3 qrot(vec4 q,vec3 v){{vec3 t=2.0*cross(q.xyz,v);return v+q.w*t+cross(q.xyz,t);}} void main(){{vec3 p=aPosition;vec3 n=aNormal;vModelPosition=aPosition;if(uIsRocket>0.5){{p=qrot(uQuaternion,(p-uMeshCenter)*uModelScale)+uRocketPosition;n=qrot(uQuaternion,n);}}else if(uIsShadow>0.5){{p=vec3(aPosition.x*uShadowRadius+uShadowCenter.x,uShadowCenter.y,aPosition.z*uShadowRadius+uShadowCenter.z);n=vec3(0.0,1.0,0.0);}}vNormal=n;vWorldPosition=p;gl_Position=uMvp*vec4(p,1.0);}}';
-        const fragmentSource='precision mediump float; uniform vec3 uColor; uniform mediump vec3 uShadowCenter; uniform mediump float uShadowRadius; uniform float uShadowOpacity; uniform float uIsGround; uniform float uIsShadow; varying vec3 vNormal; varying vec3 vWorldPosition; varying mediump vec3 vModelPosition; float gridLine(float value,float spacing,float width){{float distanceToLine=abs(fract(value/spacing+0.5)-0.5)*spacing;return 1.0-smoothstep(width,width*1.8,distanceToLine);}} void main(){{float light=0.42+0.58*max(dot(normalize(vNormal),normalize(vec3(-0.35,0.85,0.4))),0.0);if(uIsShadow>0.5){{float radius=length(vWorldPosition.xz-uShadowCenter.xz);float edge=1.0-smoothstep(uShadowRadius*0.55,uShadowRadius,radius);gl_FragColor=vec4(vec3(0.12,0.09,0.07),edge*uShadowOpacity);}}else if(uIsGround>0.5){{float minor=max(gridLine(vWorldPosition.x+7.5,20.0,0.025),gridLine(vWorldPosition.z+7.5,20.0,0.025));float major=max(gridLine(vWorldPosition.x+7.5,100.0,0.055),gridLine(vWorldPosition.z+7.5,100.0,0.055));float grain=0.98+0.02*sin(vWorldPosition.x*1.7)*sin(vWorldPosition.z*1.3);vec3 soil=vec3(0.43,0.31,0.20)*grain;soil=mix(soil,vec3(0.30,0.22,0.15),minor*0.12+major*0.20);gl_FragColor=vec4(soil*light,1.0);}}else{{float finRadial=smoothstep(44.0,58.0,length(vModelPosition.xy));float finLongitudinal=1.0-smoothstep(-1000.0,-910.0,vModelPosition.z);float finMask=finRadial*finLongitudinal;vec3 rocketColor=mix(uColor,vec3(0.88,0.08,0.10),finMask);gl_FragColor=vec4(rocketColor*light,1.0);}}}}';
+        const fragmentSource='precision mediump float; uniform vec3 uColor; uniform mediump vec3 uShadowCenter; uniform mediump float uShadowRadius; uniform float uShadowOpacity; uniform float uCloudOpacity; uniform float uIsGround; uniform float uIsShadow; uniform float uIsVegetation; uniform float uIsCloud; varying vec3 vNormal; varying vec3 vWorldPosition; varying mediump vec3 vModelPosition; void main(){{float sunDiffuse=max(dot(normalize(vNormal),normalize(vec3(-0.35,0.85,0.4))),0.0);float groundLight=0.42+0.58*sunDiffuse;float rocketLight=0.20+0.80*sunDiffuse;if(uIsCloud>0.5){{float facing=max(normalize(vNormal).z,0.0);float edgeFade=smoothstep(0.0,0.98,facing);float variation=0.94+0.06*sin(vWorldPosition.x*0.004+vWorldPosition.z*0.003);vec3 cloudColor=mix(vec3(0.70,0.78,0.82),vec3(1.0,0.99,0.95),0.45+0.55*sunDiffuse);gl_FragColor=vec4(cloudColor,uCloudOpacity*variation*edgeFade);}}else if(uIsShadow>0.5){{float radius=length(vWorldPosition.xz-uShadowCenter.xz);float edge=1.0-smoothstep(uShadowRadius*0.55,uShadowRadius,radius);gl_FragColor=vec4(vec3(0.12,0.09,0.07),edge*uShadowOpacity);}}else if(uIsGround>0.5){{float broad=0.5+0.5*sin(vWorldPosition.x*0.0011+sin(vWorldPosition.z*0.0007))*cos(vWorldPosition.z*0.0013);float grain=fract(sin(dot(floor(vWorldPosition.xz*0.018),vec2(12.9898,78.233)))*43758.5453);float patch=0.5+0.5*sin(vWorldPosition.x*0.018+vWorldPosition.z*0.011)*cos(vWorldPosition.z*0.015-vWorldPosition.x*0.008);vec3 soil=mix(vec3(0.43,0.36,0.25),vec3(0.58,0.51,0.36),0.18+0.48*broad+0.20*grain);soil=mix(soil,vec3(0.34,0.37,0.25),patch*0.18);gl_FragColor=vec4(soil*groundLight,1.0);}}else if(uIsVegetation>0.5){{float variation=fract(sin(dot(floor(vWorldPosition.xz*2.0),vec2(41.7,289.3)))*24634.6345);vec3 foliage=mix(vec3(0.16,0.22,0.10),vec3(0.37,0.38,0.18),variation);float leafLight=0.32+0.68*sunDiffuse;gl_FragColor=vec4(foliage*leafLight,1.0);}}else{{float finRadial=smoothstep(44.0,58.0,length(vModelPosition.xy));float finLongitudinal=1.0-smoothstep(-1000.0,-910.0,vModelPosition.z);float finMask=finRadial*finLongitudinal;vec3 rocketColor=mix(uColor,vec3(0.88,0.08,0.10),finMask);gl_FragColor=vec4(rocketColor*rocketLight,1.0);}}}}';
         const program=gl.createProgram(); gl.attachShader(program,shader(gl.VERTEX_SHADER,vertexSource)); gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fragmentSource)); gl.linkProgram(program);
         if(!gl.getProgramParameter(program,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program)||'WebGL program link failed');
         gl.useProgram(program);
-        const locations={{position:gl.getAttribLocation(program,'aPosition'),normal:gl.getAttribLocation(program,'aNormal'),mvp:gl.getUniformLocation(program,'uMvp'),quat:gl.getUniformLocation(program,'uQuaternion'),rocket:gl.getUniformLocation(program,'uRocketPosition'),center:gl.getUniformLocation(program,'uMeshCenter'),modelScale:gl.getUniformLocation(program,'uModelScale'),shadowCenter:gl.getUniformLocation(program,'uShadowCenter'),shadowRadius:gl.getUniformLocation(program,'uShadowRadius'),shadowOpacity:gl.getUniformLocation(program,'uShadowOpacity'),isRocket:gl.getUniformLocation(program,'uIsRocket'),isGround:gl.getUniformLocation(program,'uIsGround'),isShadow:gl.getUniformLocation(program,'uIsShadow'),color:gl.getUniformLocation(program,'uColor')}};
+        const locations={{position:gl.getAttribLocation(program,'aPosition'),normal:gl.getAttribLocation(program,'aNormal'),mvp:gl.getUniformLocation(program,'uMvp'),quat:gl.getUniformLocation(program,'uQuaternion'),rocket:gl.getUniformLocation(program,'uRocketPosition'),center:gl.getUniformLocation(program,'uMeshCenter'),modelScale:gl.getUniformLocation(program,'uModelScale'),shadowCenter:gl.getUniformLocation(program,'uShadowCenter'),shadowRadius:gl.getUniformLocation(program,'uShadowRadius'),shadowOpacity:gl.getUniformLocation(program,'uShadowOpacity'),cloudOpacity:gl.getUniformLocation(program,'uCloudOpacity'),isRocket:gl.getUniformLocation(program,'uIsRocket'),isGround:gl.getUniformLocation(program,'uIsGround'),isShadow:gl.getUniformLocation(program,'uIsShadow'),isVegetation:gl.getUniformLocation(program,'uIsVegetation'),isCloud:gl.getUniformLocation(program,'uIsCloud'),color:gl.getUniformLocation(program,'uColor')}};
 
         const encoded=document.getElementById('rocketModel').textContent.trim();
         const compressed=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
@@ -587,13 +587,43 @@ class FlightReport:
             }}
         }}
         const rocketBuffer=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,rocketBuffer); gl.bufferData(gl.ARRAY_BUFFER,vertices,gl.STATIC_DRAW);
-        const groundSegments=120, groundExtent=100, groundStep=groundExtent*2/groundSegments;
-        const terrainHeight=()=>0;
-        const terrainNormal=()=>[0,1,0];
+        const groundSegments=200, groundExtent=1000, groundStep=groundExtent*2/groundSegments;
+        const terrainHeight=(x,z)=>8*Math.sin(x*0.00065)*Math.cos(z*0.0007)+4*Math.sin((x+z)*0.0013)+0.8*Math.sin(x*0.01)*Math.cos(z*0.011);
+        const terrainNormal=(x,z)=>{{const step=6,dx=(terrainHeight(x+step,z)-terrainHeight(x-step,z))/(2*step),dz=(terrainHeight(x,z+step)-terrainHeight(x,z-step))/(2*step),length=Math.hypot(dx,1,dz);return[-dx/length,1/length,-dz/length];}};
         const groundVertices=new Float32Array(groundSegments*groundSegments*36); let groundCursor=0;
         const appendGroundVertex=(x,z)=>{{const normal=terrainNormal(x,z);groundVertices[groundCursor++]=x;groundVertices[groundCursor++]=terrainHeight(x,z);groundVertices[groundCursor++]=z;for(const component of normal)groundVertices[groundCursor++]=component;}};
         for(let row=0;row<groundSegments;row++) for(let column=0;column<groundSegments;column++){{const x=-groundExtent+column*groundStep,z=-groundExtent+row*groundStep,x1=x+groundStep,z1=z+groundStep;appendGroundVertex(x,z);appendGroundVertex(x,z1);appendGroundVertex(x1,z1);appendGroundVertex(x,z);appendGroundVertex(x1,z1);appendGroundVertex(x1,z);}}
         const groundBuffer=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,groundBuffer); gl.bufferData(gl.ARRAY_BUFFER,groundVertices,gl.STATIC_DRAW);
+        let vegetationSeed=0x5eed1234;
+        const random=()=>{{vegetationSeed=(Math.imul(1664525,vegetationSeed)+1013904223)>>>0;return vegetationSeed/4294967296;}};
+        const vegetationValues=[];
+        const appendShrubClump=(cx,baseY,cz,rx,ry,rz,rotation)=>{{
+            const sin=Math.sin(rotation),cos=Math.cos(rotation);
+            const latitudeSegments=4,longitudeSegments=8;
+            const appendVertex=(latitude,longitude)=>{{
+                const unit=[Math.cos(latitude)*Math.cos(longitude),Math.sin(latitude),Math.cos(latitude)*Math.sin(longitude)];
+                const localX=unit[0]*rx,localZ=unit[2]*rz;
+                const x=cx+localX*cos-localZ*sin,y=baseY+ry+unit[1]*ry,z=cz+localX*sin+localZ*cos;
+                const nx=unit[0]/rx*cos-unit[2]/rz*sin,ny=unit[1]/ry,nz=unit[0]/rx*sin+unit[2]/rz*cos,norm=Math.hypot(nx,ny,nz);
+                vegetationValues.push(x,y,z,nx/norm,ny/norm,nz/norm);
+            }};
+            for(let latitude=0;latitude<latitudeSegments;latitude++)for(let longitude=0;longitude<longitudeSegments;longitude++){{
+                const lat0=-Math.PI/2+latitude*Math.PI/latitudeSegments,lat1=-Math.PI/2+(latitude+1)*Math.PI/latitudeSegments;
+                const lon0=longitude*2*Math.PI/longitudeSegments,lon1=(longitude+1)*2*Math.PI/longitudeSegments;
+                appendVertex(lat0,lon0);appendVertex(lat1,lon0);appendVertex(lat1,lon1);
+                appendVertex(lat0,lon0);appendVertex(lat1,lon1);appendVertex(lat0,lon1);
+            }}
+        }};
+        for(let bush=0;bush<1000;bush++){{
+            const nearField=bush<500,spread=nearField?320:groundExtent*0.88;
+            let x=(random()*2-1)*spread,z=(random()*2-1)*spread;
+            if(nearField&&Math.hypot(x,z)<24){{x+=Math.sign(x||1)*32;z+=Math.sign(z||1)*32;}}
+            const baseY=terrainHeight(x,z),height=0.18+random()*0.22,rotation=random()*Math.PI*2;
+            appendShrubClump(x,baseY,z,0.16+random()*0.14,height,0.16+random()*0.14,rotation);
+            if(random()<0.45)appendShrubClump(x+(random()-0.5)*0.24,baseY,z+(random()-0.5)*0.24,0.13+random()*0.11,height*(0.65+random()*0.30),0.13+random()*0.11,rotation+0.8);
+        }}
+        const vegetationVertices=new Float32Array(vegetationValues);
+        const vegetationBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,vegetationBuffer);gl.bufferData(gl.ARRAY_BUFFER,vegetationVertices,gl.STATIC_DRAW);
         const shadowSegments=48, shadowVertices=new Float32Array((shadowSegments+2)*6);let shadowCursor=0;
         const appendShadowVertex=(x,z)=>{{shadowVertices[shadowCursor++]=x;shadowVertices[shadowCursor++]=0;shadowVertices[shadowCursor++]=z;shadowVertices[shadowCursor++]=0;shadowVertices[shadowCursor++]=1;shadowVertices[shadowCursor++]=0;}};
         appendShadowVertex(0,0);for(let segment=0;segment<=shadowSegments;segment++){{const angle=segment/shadowSegments*Math.PI*2;appendShadowVertex(Math.cos(angle),Math.sin(angle));}}
@@ -604,24 +634,27 @@ class FlightReport:
         drawScene=(sample)=>{{
             const ratio=window.devicePixelRatio||1, width=canvas.clientWidth, height=canvas.clientHeight;
             if(canvas.width!==Math.round(width*ratio)||canvas.height!==Math.round(height*ratio)){{canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);}}
-            gl.viewport(0,0,canvas.width,canvas.height); gl.clearColor(0.53,0.78,0.92,1); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+            gl.viewport(0,0,canvas.width,canvas.height); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
             const visualAltitude=Math.max(0,sample.alt||0);
             const rocketPosition=[0,visualAltitude,0];
             // Track the rocket from a shallow side-on perspective. World
             // positions remain in meters, so terrain recedes naturally with
             // altitude instead of being compressed into an arbitrary scale.
-            const target=rocketPosition;
-            const cameraDistance=3;
-            const eye=[0,target[1]+1.4,cameraDistance];
-            const mvp=multiplyM(perspective(0.70,canvas.width/canvas.height,0.1,maximumAltitude+cameraDistance+100),lookAt(eye,target,[0,1,0]));
+            const cameraDistance=8;
+            const target=[0,visualAltitude+0.45,0];
+            const pitchRadians=(0.4+11.6*(visualAltitude/maximumAltitude))*Math.PI/180;
+            const eye=[0,target[1]+Math.tan(pitchRadians)*cameraDistance,cameraDistance];
+            const mvp=multiplyM(perspective(0.70,canvas.width/canvas.height,0.1,groundExtent*3),lookAt(eye,target,[0,1,0]));
             gl.uniformMatrix4fv(locations.mvp,false,mvp); gl.uniform3f(locations.rocket,...rocketPosition); gl.uniform3f(locations.center,...meshCenter); gl.uniform4f(locations.quat,0,0,0,1);
-            gl.uniform1f(locations.isRocket,0);gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isGround,1);
+            gl.uniform1f(locations.isRocket,0);gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isGround,1);gl.uniform1f(locations.isVegetation,0);
             gl.bindBuffer(gl.ARRAY_BUFFER,groundBuffer); gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0); gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12); gl.drawArrays(gl.TRIANGLES,0,groundVertices.length/6);
             const shadowX=0,shadowZ=0,shadowY=terrainHeight(shadowX,shadowZ)+0.035,shadowRadius=rocketHeight*0.8,shadowOpacity=0.52;
             gl.uniform1f(locations.isGround,0);gl.uniform1f(locations.isShadow,1);gl.uniform3f(locations.shadowCenter,shadowX,shadowY,shadowZ);gl.uniform1f(locations.shadowRadius,shadowRadius);gl.uniform1f(locations.shadowOpacity,shadowOpacity);
             gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);
             gl.bindBuffer(gl.ARRAY_BUFFER,shadowBuffer);gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLE_FAN,0,shadowSegments+2);
             gl.depthMask(true);gl.disable(gl.BLEND);
+            gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isVegetation,1);
+            gl.bindBuffer(gl.ARRAY_BUFFER,vegetationBuffer);gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0);gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);gl.drawArrays(gl.TRIANGLES,0,vegetationVertices.length/6);
             const qTelemetry=normalizeQ(sample.q||[1,0,0,0]);
             // Match the dashboard's FRD-to-Three conversion: re-express the
             // firmware quaternion by the frame similarity transform, then
@@ -633,7 +666,7 @@ class FlightReport:
             const qDisplay=normalizeQ(multiplyQ(multiplyQ(multiplyQ(frameQuat,qTelemetry),frameQuatInv),modelBaseQuat));
             // qDisplay uses firmware-style (w, x, y, z); the GLSL qrot helper
             // takes conventional vector-first (x, y, z, w).
-            gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isRocket,1);gl.uniform1f(locations.modelScale,modelScale); gl.uniform4f(locations.quat,qDisplay[1],qDisplay[2],qDisplay[3],qDisplay[0]); gl.uniform3f(locations.color,0.93,0.95,0.97);
+            gl.uniform1f(locations.isVegetation,0);gl.uniform1f(locations.isShadow,0);gl.uniform1f(locations.isRocket,1);gl.uniform1f(locations.modelScale,modelScale); gl.uniform4f(locations.quat,qDisplay[1],qDisplay[2],qDisplay[3],qDisplay[0]); gl.uniform3f(locations.color,0.93,0.95,0.97);
             gl.bindBuffer(gl.ARRAY_BUFFER,rocketBuffer); gl.vertexAttribPointer(locations.position,3,gl.FLOAT,false,24,0); gl.vertexAttribPointer(locations.normal,3,gl.FLOAT,false,24,12);
             gl.drawArrays(gl.TRIANGLES,0,vertices.length/6);
         }};
