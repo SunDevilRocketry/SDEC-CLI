@@ -176,13 +176,18 @@ class Cli:
                   self.serial_connection,
                   args.sensors
               ):
-                  for sensor, reading in filtered_dump.items():
-                      print(f"{sensor.name}: {reading} {sensor.unit}")
+                  if not filtered_dump:
+                      print(f"sensor doesn't exist")
+                      break
                   else:
-                      print(f"{sensor.name}: 0.0 {sensor.unit}")
-
+                      for sensor, reading in filtered_dump.items():
+                          print(f"{sensor.name}: {reading} {sensor.unit}")
+                
           except (SerialError, InvalidDataError) as e:
               print(f"Command failed: {e}")
+          except SystemExit:
+              return
+
 
           self.serial_connection.reset_input_buffer()
 
